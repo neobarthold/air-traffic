@@ -2,6 +2,8 @@
 // Übergabe per Native Messaging an SafariWebExtensionHandler, der airtraffic://open?… öffnet.
 // Keine Host-Berechtigungen, kein Content-Script.
 
+// Hinweis: Nur ASCII im Code – Safari liest Hintergrund-Skripte nicht zuverlässig als UTF-8.
+// Nicht-ASCII-Zeichen in Strings als \uXXXX schreiben (SPEC §21.1).
 const api = globalThis.browser ?? globalThis.chrome;
 
 const MENU_OPEN = "airtraffic-open";
@@ -38,11 +40,11 @@ async function sendToAirTraffic(url, prompt) {
 // Bei jedem Start der Hintergrundseite neu anlegen (removeAll vermeidet doppelte IDs).
 async function createMenus() {
   await api.contextMenus.removeAll();
-  api.contextMenus.create({ id: MENU_OPEN, title: "Mit Air Traffic öffnen", contexts: ["link"] });
-  api.contextMenus.create({ id: MENU_CHOOSE, title: "Mit Air Traffic auswählen …", contexts: ["link"] });
+  api.contextMenus.create({ id: MENU_OPEN, title: "Mit Air Traffic \u00f6ffnen", contexts: ["link"] });
+  api.contextMenus.create({ id: MENU_CHOOSE, title: "Mit Air Traffic ausw\u00e4hlen \u2026", contexts: ["link"] });
 }
 
-createMenus().catch((error) => console.error("Air Traffic: Menü", error));
+createMenus().catch((error) => console.error("Air Traffic: Men\u00fc", error));
 
 api.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId === MENU_OPEN) sendToAirTraffic(info.linkUrl, false);

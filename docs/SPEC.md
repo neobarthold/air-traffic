@@ -413,3 +413,24 @@ Links, die in Safari angeklickt werden, gehen nicht über den Standardbrowser. D
 
 ### 20.5 README
 - Abschnitt „Safari-Erweiterung“: Zweck, Aktivieren (Air Traffic → Allgemein → „In Safari aktivieren …“ bzw. Safari → Einstellungen → Erweiterungen), Bedienung.
+
+## 21. Safari-Erweiterung: eigenes Verhalten, Vollbild, Umlaute (v1.7)
+
+### 21.1 Umlaute im Kontextmenü (erledigt)
+Safari liest `background.js` nicht als UTF-8 („Ã¶ffnen“). Strings im Erweiterungs-Code enthalten nur ASCII; Umlaute und „…“ als `\uXXXX`. Test: ein Unit-/Skript-Check, dass `SafariExtension/Resources/*.js` in String-Literalen nur ASCII enthält.
+
+### 21.2 Eigenes Verhalten für Links aus der Erweiterung
+- Config (Core, optional, abwärtskompatibel): `extensionSettings: ExtensionSettings?` mit
+  - `applyRules: Bool` (Standard `true`) – Regeln (Bedingungen + Umschreibungen) wie beim Standardbrowser anwenden;
+  - `fallbackAction: Action?` – Aktion, wenn keine Regel passt bzw. wenn `applyRules == false`; `nil` = „Wie unter ‚Wenn keine Regel passt‘“ (globale Standardaktion).
+- Gilt für „Mit Air Traffic öffnen“ und den Symbolleisten-Knopf. „Mit Air Traffic auswählen …“ (`prompt=1`) zeigt weiterhin immer die Auswahl.
+- `AirTrafficURL.decide` berücksichtigt die Einstellungen (reine Funktion, Tests: Regeln an/aus, eigene Fallback-Aktion, nil = global, prompt unverändert).
+- Einstellungen → Allgemein → „Safari-Erweiterung“: Toggle „Regeln anwenden“; darunter „Wenn keine Regel passt“ bzw. (Regeln aus) „Links aus Safari“: Picker „Wie Standardaktion“ / eigene Aktion (bestehender Aktions-Editor). Kurzer Hilfetext. `--snapshot` zeigt den Abschnitt.
+
+### 21.3 Auswahlfenster über Vollbild-Apps
+Problem: Ist Safari (oder ein anderer Browser) im Vollbild, erscheint das Auswahlfenster im Desktop-Space statt über dem Vollbild-Fenster.
+- Panel muss im **aktuell aktiven Space** erscheinen, auch über Vollbild-Apps: `styleMask` mit `.nonactivatingPanel`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]` (bzw. `.moveToActiveSpace` + `.fullScreenAuxiliary`, je nachdem, was nachweislich funktioniert), Level über Vollbild-Fenstern (z. B. `.popUpMenu` oder `.modalPanel`). Kein Space-Wechsel durch `NSApp.activate()` vor dem Anzeigen – erst Panel zeigen und Key machen.
+- Tastatur (1–9, Pfeile, ⏎, ⌥⏎, ⇥, ⌘C, esc) muss weiter funktionieren, auch wenn Air Traffic nicht aktive App ist (nicht aktivierendes Panel wird trotzdem Key). Fokusverlust schließt das Panel wie bisher; Fenster der Einstellungen bleiben unberührt.
+- Nach dem Öffnen eines Browsers: Fokus geht an den Ziel-Browser; bei Abbruch (esc) zurück an die vorherige App, ohne Space-Wechsel.
+- Gilt für alle Wege ins Auswahlfenster (Standardbrowser-Links, Erweiterung).
+- Verifikation: Testfenster einer Hilfs-App (z. B. ein per Skript gestartetes Vollbild-Fenster) ist optional; mindestens per Code-Review und Log, dass Panel-Space = aktiver Space. Der Nutzer testet mit Safari im Vollbild.
