@@ -6,6 +6,21 @@
     <description>Updates für Air Traffic</description>
     <language>de</language>
     <item>
+      <title>Version 1.6</title>
+      <pubDate>Thu, 05 Nov 2026 23:02:21 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>1.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Safari-Erweiterung: Links per Rechtsklick („Mit Air Traffic öffnen“ / „… auswählen“) oder Symbolleisten-Knopf an Air Traffic schicken – dann greifen deine Regeln</li>
+<li>Neues URL-Schema airtraffic://open?url=…</li>
+<li>Einstellungen → Allgemein: Status der Safari-Erweiterung und „In Safari aktivieren …“</li>
+</ul>
+      ]]></description>
+      <enclosure url="https://github.com/neobarthold/air-traffic/releases/download/v1.6/Air-Traffic-1.6.zip" length="5445587" type="application/octet-stream" sparkle:edSignature="SykYwG4YP8kr14bcwt0PLR3HNVON7YL5BMe46tZTISWIO49Cz6/DALz76+cQmXav8nSzeUadJRLMh9CzQBoNBg=="/>
+    </item>
+    <item>
       <title>Version 1.5</title>
       <pubDate>Thu, 05 Nov 2026 22:36:35 +0000</pubDate>
       <sparkle:version>3</sparkle:version>
