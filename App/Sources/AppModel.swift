@@ -154,6 +154,17 @@ final class AppModel {
         config.assistant = normalized.isEmpty ? nil : normalized
     }
 
+    // MARK: Safari-Erweiterung (§21.2)
+
+    var extensionSettings: ExtensionSettings { config.extensionSettings ?? ExtensionSettings() }
+
+    /// Ändert das Verhalten für Links aus der Erweiterung; alles auf Standard → Abschnitt fällt aus der Config.
+    func updateExtensionSettings(_ change: (inout ExtensionSettings) -> Void) {
+        var settings = extensionSettings
+        change(&settings)
+        config.extensionSettings = settings.isDefault ? nil : settings
+    }
+
     /// OpenRouter: Key vorhanden; CLI: Binärdatei gefunden (Cache oder schnelle Suche ohne Login-Shell).
     var assistantAvailable: Bool {
         guard let cli = assistantProvider.cli else { return hasAssistantKey }

@@ -178,4 +178,77 @@ struct AirTrafficURLDecideTests {
         let fromSafari = LinkContext(sourceBundleIdentifier: "com.apple.Safari")
         #expect(AirTrafficURL.decide(withoutSource, context: fromSafari, config: config).matchedRuleID == config.rules[0].id)
     }
+
+    // MARK: Eigenes Verhalten (§21.2)
+
+    private static let browserB = AppRef(bundleIdentifier: "com.example.b", path: "/Applications/B.app", displayName: "B")
+
+    private func config(_ settings: ExtensionSettings?) -> Config {
+        var c = config
+        c.extensionSettings = settings
+        return c
+    }
+
+    @Test func defaultSettingsMatchNilSettings() {
+        for link in ["https://github.com/acme/webshop/pull/3776", "https://example.com/"] {
+            let request = AirTrafficURL.Request(url: u(link), source: "com.apple.Safari")
+            #expect(
+                AirTrafficURL.decide(request, context: LinkContext(), config: config(ExtensionSettings()))
+                    == AirTrafficURL.decide(request, context: LinkContext(), config: config(nil))
+            )
+        }
+        let d = AirTrafficURL.decide(.init(url: u("https://example.com/")), context: LinkContext(), config: config(nil))
+        #expect(d.matchedRuleID == nil)
+        #expect(d.action == .openFirstRunning(fallback: nil), "nil = globale Standardaktion")
+    }
+
+    @Test func ownFallbackWhenNoRuleMatches() {
+        let c = config(ExtensionSettings(fallbackAction: .open(Self.browserB)))
+        let none = AirTrafficURL.decide(.init(url: u("https://example.com/")), context: LinkContext(), config: c)
+        #expect(none.matchedRuleID == nil)
+        #expect(none.action == .open(Self.browserB))
+
+        // Passt eine Regel, gilt weiter deren Aktion samt Umschreibung.
+        let hit = AirTrafficURL.decide(.init(url: u("https://github.com/acme/webshop/pull/3776")), context: LinkContext(), config: c)
+        #expect(hit.matchedRuleID == config.rules[1].id)
+        #expect(hit.finalURL == u("https://linear.review/acme/webshop/pull/3776"))
+        #expect(hit.action == .open(TestRules.linearApp))
+    }
+
+    @Test func rulesOffSkipsConditionsAndRewrites() {
+        let request = AirTrafficURL.Request(url: u("https://github.com/acme/webshop/pull/3776"), source: "com.apple.Safari")
+        let global = AirTrafficURL.decide(request, context: LinkContext(), config: config(ExtensionSettings(applyRules: false)))
+        #expect(global.matchedRuleID == nil)
+        #expect(global.finalURL == request.url, "keine Umschreibung")
+        #expect(global.action == .openFirstRunning(fallback: nil), "nil = globale Standardaktion")
+
+        let own = AirTrafficURL.decide(
+            request, context: LinkContext(),
+            config: config(ExtensionSettings(applyRules: false, fallbackAction: .prompt(.running)))
+        )
+        #expect(own.matchedRuleID == nil)
+        #expect(own.finalURL == request.url)
+        #expect(own.action == .prompt(.running))
+    }
+
+    @Test(arguments: [
+        ExtensionSettings(applyRules: false, fallbackAction: .open(browserB)),
+        ExtensionSettings(applyRules: true, fallbackAction: .open(browserB)),
+        ExtensionSettings(applyRules: false),
+    ])
+    func promptUnchangedBySettings(settings: ExtensionSettings) {
+        for link in ["https://github.com/acme/webshop/pull/3776", "https://example.com/"] {
+            let request = AirTrafficURL.Request(url: u(link), prompt: true)
+            let withSettings = AirTrafficURL.decide(request, context: LinkContext(), config: config(settings))
+            #expect(withSettings == AirTrafficURL.decide(request, context: LinkContext(), config: config(nil)))
+            #expect(withSettings.action == .prompt(.all))
+        }
+    }
+
+    @Test func settingsDoNotAffectRuleEngine() {
+        let c = config(ExtensionSettings(applyRules: false, fallbackAction: .open(Self.browserB)))
+        let d = RuleEngine.decide(url: u("https://example.com/"), context: LinkContext(), config: c)
+        #expect(d.action == .openFirstRunning(fallback: nil), "Standardbrowser-Links bleiben unberührt")
+    }
 }
+

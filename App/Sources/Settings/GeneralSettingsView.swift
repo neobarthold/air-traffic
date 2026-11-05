@@ -32,7 +32,7 @@ struct GeneralSettingsView: View {
                     }
                 }
 
-                SafariExtensionSettingsSection()
+                SafariExtensionSettingsSection(model: model)
 
                 AssistantSettingsSection(model: model)
 

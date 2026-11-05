@@ -152,6 +152,36 @@ struct ConfigTests {
         #expect(try ConfigStore.decode(Data(withAssistant.utf8)).assistantModel == AssistantSettings.defaultModel)
     }
 
+    @Test func extensionSettingsRoundTripWithAndWithout() throws {
+        var config = Self.fullConfig()
+        let without = String(decoding: try ConfigStore.encode(config), as: UTF8.self)
+        #expect(!without.contains("extensionSettings"), "fehlt = nicht geschrieben")
+        #expect(try ConfigStore.decode(Data(without.utf8)).extensionSettings == nil)
+
+        let safari = AppRef(bundleIdentifier: "com.apple.Safari", path: "/Applications/Safari.app", displayName: "Safari")
+        config.extensionSettings = ExtensionSettings(applyRules: false, fallbackAction: .open(safari))
+        let data = try ConfigStore.encode(config)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""applyRules" : false"#))
+        #expect(text.contains(#""fallbackAction""#))
+        #expect(try ConfigStore.decode(data) == config)
+
+        config.extensionSettings = ExtensionSettings()
+        let defaults = String(decoding: try ConfigStore.encode(config), as: UTF8.self)
+        #expect(!defaults.contains("fallbackAction"), "nil = nicht geschrieben")
+        #expect(try ConfigStore.decode(Data(defaults.utf8)) == config)
+        #expect(ExtensionSettings().isDefault)
+        #expect(!ExtensionSettings(applyRules: false).isDefault)
+    }
+
+    @Test func extensionSettingsDefaultsWhenFieldsMissing() throws {
+        let json = #"{"schemaVersion":1,"extensionSettings":{},"defaultAction":{"type":"prompt","scope":"all"}}"#
+        let config = try ConfigStore.decode(Data(json.utf8))
+        #expect(config.extensionSettings == ExtensionSettings(applyRules: true, fallbackAction: nil))
+        let partial = #"{"schemaVersion":1,"extensionSettings":{"fallbackAction":{"type":"prompt","scope":"running"}}}"#
+        #expect(try ConfigStore.decode(Data(partial.utf8)).extensionSettings == ExtensionSettings(fallbackAction: .prompt(.running)))
+    }
+
     @Test func testURLRoundTripWithAndWithout() throws {
         var config = Self.fullConfig()
         let without = String(decoding: try ConfigStore.encode(config), as: UTF8.self)

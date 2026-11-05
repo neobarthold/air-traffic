@@ -59,9 +59,16 @@ enum SnapshotCommand {
             }
 
             // Ganze Seite „Allgemein“ mit allen Abschnitten, je einmal pro Anbieter-Art (§16.3, §17).
+            // Safari-Erweiterung (§21.2): erst Standard, dann Regeln aus mit eigener Aktion.
             let savedAssistant = model.config.assistant
-            for (name, provider) in [("general-full", AssistantProvider.openRouter), ("general-claude", .claudeCLI)] {
+            let savedExtension = model.config.extensionSettings
+            let ownExtension = ExtensionSettings(applyRules: false, fallbackAction: .prompt(.running))
+            for (name, provider, extensionSettings) in [
+                ("general-full", AssistantProvider.openRouter, savedExtension),
+                ("general-claude", .claudeCLI, ownExtension),
+            ] {
                 model.updateAssistant { $0.provider = provider }
+                model.config.extensionSettings = extensionSettings
                 if let cli = provider.cli { await model.refreshCLIStatus(cli) }
                 model.settingsTab = .general
                 window.setContentSize(fullPageSize)
@@ -70,6 +77,7 @@ enum SnapshotCommand {
                 if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
             }
             model.config.assistant = savedAssistant
+            model.config.extensionSettings = savedExtension
             window.orderOut(nil)
 
             if let url = await renderAssistantSheet(model: model, appearance: appearance, to: dir, suffix: suffix) {

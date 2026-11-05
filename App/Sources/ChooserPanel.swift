@@ -54,10 +54,45 @@ final class ChooserState {
     }
 }
 
-/// Titelloses, schwebendes Panel, das Tastatureingaben bekommt.
+/// Titelloses, schwebendes Panel, das Tastatureingaben bekommt (SPEC §21.3).
+///
+/// Nicht aktivierend: Es wird Key, ohne Air Traffic zur aktiven App zu machen. So bleibt der Space
+/// stehen (auch ein Vollbild-Space), und die Tastatur geht trotzdem ans Panel. Tasten behandelt das
+/// Panel selbst (`keyHandler`) statt über einen lokalen Event-Monitor – unabhängig davon, ob die App aktiv ist.
 final class ChooserPanel: NSPanel {
+    /// `true` = Ereignis verbraucht. Darf mehrfach für dasselbe Ereignis gefragt werden
+    /// (Tastenkürzel, dann `keyDown`), solange es `false` liefert, ohne etwas zu tun.
+    var keyHandler: ((NSEvent) -> Bool)?
+
+    init(contentRect: NSRect) {
+        super.init(
+            contentRect: contentRect,
+            // `.nonactivatingPanel` muss beim Erzeugen gesetzt sein (spätere Änderung greift im Window-Server nicht).
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        isFloatingPanel = true
+        becomesKeyOnlyIfNeeded = false
+        hidesOnDeactivate = false
+        // Über Vollbild-Fenstern (Ebene normal) und schwebenden Paletten anderer Apps.
+        level = .modalPanel
+        // In jedem Space vorhanden, auch in Vollbild-Spaces; nicht in Mission Control / ⌘` .
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, keyHandler?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, keyHandler?(event) == true { return }
+        super.sendEvent(event)
+    }
 }
 
 /// Zeigt Chooser-Anfragen nacheinander.
@@ -68,8 +103,9 @@ final class ChooserController: NSObject, NSWindowDelegate {
     private var queue: [ChooserRequest] = []
     private var panel: ChooserPanel?
     private var state: ChooserState?
-    private var monitor: Any?
     private weak var urlField: NSTextField?
+    /// Vorne liegende App beim Öffnen; bekommt bei Abbruch den Fokus zurück, falls Air Traffic aktiv wurde.
+    private var previousApp: NSRunningApplication?
     /// Nach dem Schließen des Panels (z. B. wartendes Update installieren, §17).
     var onClose: (() -> Void)?
 
@@ -113,21 +149,13 @@ final class ChooserController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: view)
         hosting.sizingOptions = [.preferredContentSize]
 
-        let panel = ChooserPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 240),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let panel = ChooserPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 240))
         // Transparentes Panel; Form, Glas/Material und Radius kommen aus dem SwiftUI-Inhalt.
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.contentViewController = hosting
         hosting.view.wantsLayer = true
         hosting.view.layer?.backgroundColor = .clear
@@ -137,14 +165,29 @@ final class ChooserController: NSObject, NSWindowDelegate {
         panel.invalidateShadow()
         self.panel = panel
 
-        installKeyMonitor()
-        NSApp.activate()
+        panel.keyHandler = { [weak self] event in
+            MainActor.assumeIsolated { self?.handleKey(event) ?? false }
+        }
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+        // Kein `NSApp.activate()`: das würde in den Space mit Air-Traffic-Fenstern wechseln (§21.3).
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         // URL-Feld zunächst nicht fokussiert, damit 1–9 und Pfeile direkt wirken.
         panel.makeFirstResponder(nil)
         state.isEditingURL = false
-        Log.chooser.info("Chooser gezeigt (\(browsers.count) Browser)")
+        // `NSApp.isActive` meldet bei einem Key-Panel ohne Aktivierung ebenfalls true; maßgeblich ist die vorderste App.
+        Log.chooser.info(
+            "Chooser gezeigt (\(browsers.count) Browser), Key: \(panel.isKeyWindow), aktiver Space: \(panel.isOnActiveSpace), Air Traffic vorne: \(Self.isFrontmost), vorher vorne: \(front.map(Self.name) ?? "?", privacy: .public)"
+        )
+    }
+
+    private static var isFrontmost: Bool {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+    }
+
+    private static func name(_ app: NSRunningApplication) -> String {
+        "\(app.bundleIdentifier ?? "?") (pid \(app.processIdentifier))"
     }
 
     private static func screenUnderMouse() -> NSScreen? {
@@ -178,7 +221,8 @@ final class ChooserController: NSObject, NSWindowDelegate {
         let activates = !NSEvent.modifierFlags.contains(.option)
         let app = state.browsers[target]
         if opener?.open(url, with: app, activates: activates) == true {
-            close(panel)
+            // Mit Aktivierung geht der Fokus an den Browser, sonst zurück an die vorherige App.
+            close(panel, restoreFocus: !activates)
         } else {
             state.hint = "„\(app.displayName)“ wurde nicht gefunden."
             NSSound.beep()
@@ -207,13 +251,27 @@ final class ChooserController: NSObject, NSWindowDelegate {
         return editor.delegate === urlField
     }
 
-    private func close(_ panel: NSPanel) {
-        removeKeyMonitor()
+    /// `restoreFocus`: Abbruch – ist Air Traffic doch vorderste App geworden (z. B. Kaltstart per Link),
+    /// geht der Fokus an die vorherige App zurück, solange keine Einstellungen offen sind. Im Normalfall
+    /// bleibt die vorherige App vorne, und das Schließen des Panels gibt ihr den Fokus von selbst zurück.
+    private func close(_ panel: ChooserPanel, restoreFocus: Bool = false) {
+        panel.keyHandler = nil
         panel.delegate = nil
         panel.orderOut(nil)
         self.panel = nil
         state = nil
         urlField = nil
+        let previous = previousApp
+        previousApp = nil
+        if restoreFocus, Self.isFrontmost, !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) {
+            if let previous, !previous.isTerminated {
+                Log.chooser.info("Fokus zurück an \(Self.name(previous), privacy: .public)")
+                previous.activate()
+            } else {
+                // Vorherige App unbekannt (Air Traffic war beim Öffnen schon vorne): abgeben statt aktiv bleiben.
+                NSApp.hide(nil)
+            }
+        }
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
                 self?.showNext()
@@ -223,26 +281,12 @@ final class ChooserController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        // Fokusverlust schließt das Panel.
+        // Fokusverlust schließt das Panel; der Fokus liegt schon dort, wohin geklickt wurde.
         guard let panel, (notification.object as? NSPanel) === panel else { return }
         close(panel)
     }
 
     // MARK: Tastatur
-
-    private func installKeyMonitor() {
-        removeKeyMonitor()
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Lokale Monitore laufen auf dem Main Thread.
-            let consumed = MainActor.assumeIsolated { self?.handleKey(event) ?? false }
-            return consumed ? nil : event
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-    }
 
     private enum Key {
         static let tab: UInt16 = 48
@@ -280,7 +324,7 @@ final class ChooserController: NSObject, NSWindowDelegate {
             return false
         }
         switch event.keyCode {
-        case Key.escape: close(panel); return true
+        case Key.escape: close(panel, restoreFocus: true); return true
         case Key.returnKey, Key.enter: open(index: nil); return true
         case Key.tab: focusURLField(); return true
         case Key.left:

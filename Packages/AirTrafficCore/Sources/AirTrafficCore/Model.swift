@@ -51,19 +51,23 @@ public struct Config: Codable, Sendable, Equatable {
     public var defaultAction: Action
     /// KI-Assistent (§12). Optional: fehlt in älteren Configs und wird nur geschrieben, wenn gesetzt.
     public var assistant: AssistantSettings?
+    /// Verhalten für Links aus der Safari-Erweiterung (§21.2). Optional: fehlt = Standard, wird nur geschrieben, wenn gesetzt.
+    public var extensionSettings: ExtensionSettings?
 
     public init(
         schemaVersion: Int = Config.currentSchemaVersion,
         browsers: [AppRef] = [],
         rules: [Rule] = [],
         defaultAction: Action = .prompt(.all),
-        assistant: AssistantSettings? = nil
+        assistant: AssistantSettings? = nil,
+        extensionSettings: ExtensionSettings? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.browsers = browsers
         self.rules = rules
         self.defaultAction = defaultAction
         self.assistant = assistant
+        self.extensionSettings = extensionSettings
     }
 
     /// Modell-ID für den Assistenten; leer oder fehlend = Standard.
@@ -73,7 +77,7 @@ public struct Config: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, browsers, rules, defaultAction, assistant
+        case schemaVersion, browsers, rules, defaultAction, assistant, extensionSettings
     }
 
     public init(from decoder: any Decoder) throws {
@@ -83,7 +87,33 @@ public struct Config: Codable, Sendable, Equatable {
         rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
         defaultAction = try c.decodeIfPresent(Action.self, forKey: .defaultAction) ?? .prompt(.all)
         assistant = try c.decodeIfPresent(AssistantSettings.self, forKey: .assistant)
+        extensionSettings = try c.decodeIfPresent(ExtensionSettings.self, forKey: .extensionSettings)
     }
+}
+
+/// Verhalten für `airtraffic://open`-Links aus der Safari-Erweiterung ohne `prompt` (§21.2):
+/// „Mit Air Traffic öffnen“ und Symbolleisten-Knopf. „Mit Air Traffic auswählen …“ zeigt immer die Auswahl.
+public struct ExtensionSettings: Codable, Sendable, Equatable {
+    /// Regeln (Bedingungen + Umschreibungen) wie beim Standardbrowser anwenden.
+    public var applyRules: Bool
+    /// Aktion, wenn keine Regel passt bzw. wenn `applyRules == false`; `nil` = globale Standardaktion.
+    public var fallbackAction: Action?
+
+    public init(applyRules: Bool = true, fallbackAction: Action? = nil) {
+        self.applyRules = applyRules
+        self.fallbackAction = fallbackAction
+    }
+
+    private enum CodingKeys: String, CodingKey { case applyRules, fallbackAction }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        applyRules = try c.decodeIfPresent(Bool.self, forKey: .applyRules) ?? true
+        fallbackAction = try c.decodeIfPresent(Action.self, forKey: .fallbackAction)
+    }
+
+    /// Alles auf Standard – dann schreibt die Config den Abschnitt gar nicht.
+    public var isDefault: Bool { self == ExtensionSettings() }
 }
 
 /// Einstellungen des KI-Assistenten. Der API-Key steht nie hier, nur im Schlüsselbund.
