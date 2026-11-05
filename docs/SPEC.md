@@ -23,7 +23,7 @@ Menüleisten-Icon, Shortcuts/App Intents, Share-Extension, Browser-Erweiterungen
 | Mindest-OS | macOS 15.0 |
 | Projekt | XcodeGen (`project.yml`, `/opt/homebrew/bin/xcodegen`); `.xcodeproj` wird generiert |
 | Bundle-ID | `de.neoskop.AirTraffic`, Produktname „Air Traffic“ |
-| Signierung | lokal ad hoc (`CODE_SIGN_IDENTITY = "-"`), Hardened Runtime aus, kein Sandbox |
+| Signierung | Entwicklung ad hoc (`CODE_SIGN_IDENTITY = "-"`); Releases ab 1.5 mit Developer ID (Neoskop GmbH, PVW9KTQ7MR), Hardened Runtime, notarisiert (§19); kein Sandbox |
 | Aktivierung | `LSUIElement = YES` (kein Dock-Icon). Solange das Einstellungsfenster offen ist: `NSApp.setActivationPolicy(.regular)` + minimales Hauptmenü (App, Bearbeiten mit Cut/Copy/Paste/Select All/Undo, Fenster), danach zurück auf `.accessory`. Grund: ohne Hauptmenü funktionieren ⌘C/⌘V in Textfeldern nicht. |
 | Logging | `os.Logger(subsystem: "de.neoskop.AirTraffic", category: …)` |
 
@@ -368,9 +368,15 @@ Neben OpenRouter kann der KI-Assistent (§12) ein bestehendes Abo über die **lo
 - **Bedienung:** Menü „Air Traffic → Nach Updates suchen …“ (Hauptmenü, solange Einstellungen offen). In Allgemein neuer Abschnitt „Updates“ (`arrow.triangle.2.circlepath`): Version (Marketing + Build), Toggle „Täglich nach Updates suchen“ (= `automaticallyChecksForUpdates`), Toggle „Updates automatisch installieren“ (= `automaticallyDownloadsUpdates`), Knopf „Jetzt suchen“, „Zuletzt geprüft: …“.
 - **Versionen:** `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `project.yml`; Build-Nummer steigt mit jedem Release.
 - **Release-Skript `scripts/release.sh <version>`:** Versionen setzen (Build +1), `xcodegen generate`, Release-Build, `ditto -c -k --keepParent` → `Air-Traffic-<version>.zip`, Sparkle-`sign_update --account air-traffic` (Werkzeuge werden bei Bedarf aus dem offiziellen Sparkle-Release 2.10.1 nach `build/sparkle-tools` geladen), `appcast.xml` im Repo-Root ergänzen (neuester Eintrag oben, `sparkle:version`, `sparkle:shortVersionString`, `sparkle:edSignature`, `length`, `minimumSystemVersion` 15.0, Download-URL `https://github.com/neobarthold/air-traffic/releases/download/v<version>/Air-Traffic-<version>.zip`, Release-Notes aus `--notes` bzw. CHANGELOG-Abschnitt), `gh release create v<version>` mit ZIP. Commit/Push macht das Skript **nicht**; es druckt die nächsten Befehle. `--dry-run` baut und signiert nur.
-- Ad-hoc-Signatur bleibt (Developer-ID kommt später); Updates werden über die EdDSA-Signatur geprüft.
+- Updates werden zusätzlich über die EdDSA-Signatur geprüft (auch beim Wechsel von ad hoc 1.4 auf Developer ID 1.5).
 
 ## 18. README und Demo-Daten
 - `README.md` (Deutsch): Was ist Air Traffic, Funktionen (Regeln, Umschreiben, Test je Regel, KI-Assistent mit drei Anbietern, Choosy-Import, Updates), Screenshots, Installation (Release-ZIP, Hinweis Gatekeeper bei Ad-hoc-Signatur: Rechtsklick → Öffnen), Bauen aus dem Quellcode (XcodeGen, Xcode 27), Tests, Debug-Schalter, Release-Ablauf, Datenschutz (Key nur im Schlüsselbund, KI nur auf Klick), Lizenz-Hinweis („Alle Rechte vorbehalten“, sofern nicht anders festgelegt).
 - `docs/demo-config.json`: neutrale Beispiel-Config (acme/example-Domains, keine echten Kunden), ≥ 6 Regeln inkl. Umschreibung, Vorrang-Fall und deaktivierter Regel.
 - `scripts/screenshots.sh`: `--snapshot` mit `AIRTRAFFIC_CONFIG_PATH=docs/demo-config.json` nach `docs/images/`; README bindet `docs/images/*-light.png` ein.
+
+## 19. Developer-ID-Signatur und Notarisierung (v1.5)
+- `scripts/release.sh` signiert nach dem Build von innen nach außen mit `Developer ID Application: Neoskop GmbH (PVW9KTQ7MR)` (SHA-1 `EF3BF4DE…7186D2`, überschreibbar per `DEVELOPER_ID`): Sparkle-XPC-Dienste, `Autoupdate`, `Updater.app`, `Sparkle.framework`, App – jeweils `--options runtime --timestamp`.
+- Notarisierung mit `xcrun notarytool submit --keychain-profile air-traffic --wait`, danach `stapler staple` und Prüfung `spctl` („Notarized Developer ID“); erst dann ZIP und Sparkle-Signatur.
+- Zugangsdaten: notarytool-Profil `air-traffic` im Schlüsselbund (App-spezifisches Passwort), nie im Repo.
+- Zertifikat läuft am 1. 2. 2027 ab – vorher erneuern (Neoskop Account Holder/Admin). Bestehende Releases bleiben gültig.

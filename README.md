@@ -40,8 +40,8 @@ Alle Screenshots stammen aus der neutralen Beispiel-Konfiguration [`docs/demo-co
 1. Das neueste `Air-Traffic-<version>.zip` unter
    [Releases](https://github.com/neobarthold/air-traffic/releases) laden und entpacken.
 2. `Air Traffic.app` nach `/Programme` ziehen.
-3. Erster Start: Die App ist nur ad hoc signiert (noch keine Developer-ID). Gatekeeper blockiert
-   deshalb den Doppelklick – **Rechtsklick auf die App → Öffnen → Öffnen**. Danach startet sie normal.
+3. Starten. Die App ist mit Developer ID signiert und von Apple notarisiert; Gatekeeper lässt sie
+   ohne Umweg zu. (Version 1.4 war nur ad hoc signiert – dort einmalig Rechtsklick → Öffnen.)
 4. In den Einstellungen unter **Allgemein** auf „Als Standardbrowser festlegen“ klicken und bestätigen.
 
 Voraussetzung: macOS 15 oder neuer.

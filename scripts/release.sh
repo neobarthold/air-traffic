@@ -3,14 +3,18 @@
 #
 #   scripts/release.sh <version> [--notes "<Text>"] [--dry-run] [--no-sign]
 #
-# Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → ZIP → Sparkle-Signatur
+# Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → Developer-ID-Signatur →
+# Notarisierung + Staple → ZIP → Sparkle-Signatur
 # (sign_update --account air-traffic, Schlüssel aus dem Schlüsselbund) → appcast.xml ergänzen →
 # gh release create v<version>. Commit und Push macht das Skript nicht; es druckt die nächsten Befehle.
 #
 #   --notes "<Text>"  Release-Notes (Markdown, „- “ = Aufzählung). Sonst Abschnitt „## <version>“ aus CHANGELOG.md.
 #   --dry-run         Nur bauen und signieren: project.yml und appcast.xml bleiben unverändert,
 #                     kein GitHub-Release. Vorschau des Appcasts nach build/dist/appcast.dry-run.xml.
-#   --no-sign         Nur mit --dry-run: ohne Signatur (lädt keine Sparkle-Werkzeuge).
+#   --no-sign         Nur mit --dry-run: ohne Developer-ID, Notarisierung und Sparkle-Signatur.
+#
+# Voraussetzungen: Developer-ID-Zertifikat im Schlüsselbund (DEVELOPER_ID), notarytool-Profil
+# „air-traffic“ (NOTARY_PROFILE), Sparkle-Schlüssel im Schlüsselbund (Account air-traffic).
 set -euo pipefail
 
 SPARKLE_VERSION="2.10.1"
@@ -19,6 +23,11 @@ SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPAR
 SIGNING_ACCOUNT="air-traffic"
 REPO_SLUG="neobarthold/air-traffic"
 MIN_SYSTEM_VERSION="15.0"
+# Developer ID Application: Neoskop GmbH (PVW9KTQ7MR) – SHA-1, weil der Name im Schlüsselbund doppelt vorkommt.
+DEVELOPER_ID="${DEVELOPER_ID:-EF3BF4DE692DB8951ABA392B739551F17A7186D2}"
+TEAM_ID="PVW9KTQ7MR"
+# Zugangsdaten für notarytool (xcrun notarytool store-credentials air-traffic …).
+NOTARY_PROFILE="${NOTARY_PROFILE:-air-traffic}"
 APP_NAME="Air Traffic"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +37,7 @@ die() { echo "Fehler: $*" >&2; exit 1; }
 step() { printf '\n▸ %s\n' "$*"; }
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -126,7 +135,45 @@ PLIST="$APP/Contents/Info.plist"
 plutil -extract SUPublicEDKey raw "$PLIST" >/dev/null || die "SUPublicEDKey fehlt in Info.plist"
 [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]] || die "Sparkle.framework ist nicht eingebettet"
 codesign --verify --deep --strict "$APP" || die "Code-Signatur ungültig"
-echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle eingebettet, Signatur gültig (ad hoc)"
+echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle eingebettet"
+
+# --- Developer ID + Notarisierung ---------------------------------------------
+# Signiert von innen nach außen (Sparkle-Helfer → Framework → App), Hardened Runtime + Zeitstempel,
+# dann Notarisierung bei Apple und Ticket an die App heften. Mit --no-sign entfällt alles (nur Probelauf).
+if [[ $NO_SIGN -eq 0 ]]; then
+  security find-identity -v -p codesigning | grep -q "$DEVELOPER_ID" \
+    || die "Developer-ID-Zertifikat $DEVELOPER_ID nicht im Schlüsselbund"
+  step "Developer-ID-Signatur ($DEVELOPER_ID)"
+  sign() { codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID" "$@"; }
+  SPARKLE_B="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+  for helper in "$SPARKLE_B"/XPCServices/*.xpc "$SPARKLE_B/Autoupdate" "$SPARKLE_B/Updater.app"; do
+    [[ -e "$helper" ]] || continue
+    if [[ "$helper" == *Downloader.xpc ]]; then sign --preserve-metadata=entitlements "$helper"; else sign "$helper"; fi
+  done
+  sign "$APP/Contents/Frameworks/Sparkle.framework"
+  sign "$APP"
+  codesign --verify --deep --strict "$APP" || die "Developer-ID-Signatur ungültig"
+  codesign -dv "$APP" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || die "TeamIdentifier ist nicht $TEAM_ID"
+
+  step "Notarisierung (Profil „$NOTARY_PROFILE“, dauert meist 1–5 min)"
+  NOTARIZE_ZIP="$DIST/notarize-$VERSION.zip"
+  rm -f "$NOTARIZE_ZIP"
+  ditto -c -k --keepParent "$APP" "$NOTARIZE_ZIP"
+  NOTARY_OUT="$(xcrun notarytool submit "$NOTARIZE_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)" \
+    || die "notarytool fehlgeschlagen"
+  rm -f "$NOTARIZE_ZIP"
+  NOTARY_STATUS="$(plutil -extract status raw - <<<"$NOTARY_OUT" 2>/dev/null || echo "?")"
+  NOTARY_ID="$(plutil -extract id raw - <<<"$NOTARY_OUT" 2>/dev/null || echo "?")"
+  if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+    xcrun notarytool log "$NOTARY_ID" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    die "Notarisierung: $NOTARY_STATUS (ID $NOTARY_ID)"
+  fi
+  echo "Notarisiert (ID $NOTARY_ID)"
+  xcrun stapler staple "$APP" >/dev/null || die "stapler fehlgeschlagen"
+  spctl --assess --type execute -vv "$APP" 2>&1 | grep -q "Notarized Developer ID" \
+    || die "Gatekeeper akzeptiert die App nicht als notarisiert"
+  echo "OK: Gatekeeper akzeptiert die App (Notarized Developer ID)"
+fi
 
 # --- ZIP ----------------------------------------------------------------------
 ZIP_NAME="Air-Traffic-$VERSION.zip"
