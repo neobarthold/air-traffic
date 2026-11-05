@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Air Traffic</title>
+    <link>https://raw.githubusercontent.com/neobarthold/air-traffic/main/appcast.xml</link>
+    <description>Updates für Air Traffic</description>
+    <language>de</language>
+    <item>
+      <title>Version 1.4</title>
+      <pubDate>Thu, 05 Nov 2026 22:04:10 +0000</pubDate>
+      <sparkle:version>2</sparkle:version>
+      <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Neues Design: Regeln als Ablauf Wenn → Umschreiben → Öffnen, Test fest im Editor, Auswahlfenster aus Glas</li>
+<li>KI-Assistent wahlweise über OpenRouter, Claude-Abo (Claude Code) oder ChatGPT-Abo (Codex)</li>
+<li>Automatische Updates mit Sparkle (täglich prüfen, automatisch installieren)</li>
+</ul>
+      ]]></description>
+      <enclosure url="https://github.com/neobarthold/air-traffic/releases/download/v1.4/Air-Traffic-1.4.zip" length="5048173" type="application/octet-stream" sparkle:edSignature="wvYGmIPU74cnJO01GoWWYC5pNr/U4uGsmNwkj/qdHKtx8jt0v3aJLSpFmbpkfgx7wKJWM3UVd9bGHG/79XuyBQ=="/>
+    </item>
+  </channel>
+</rss>
