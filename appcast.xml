@@ -6,6 +6,21 @@
     <description>Updates für Air Traffic</description>
     <language>de</language>
     <item>
+      <title>Version 1.7</title>
+      <pubDate>Thu, 05 Nov 2026 23:45:28 +0000</pubDate>
+      <sparkle:version>5</sparkle:version>
+      <sparkle:shortVersionString>1.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Safari-Erweiterung: eigenes Verhalten wählbar (Regeln an/aus, eigene Aktion ohne Regeltreffer)</li>
+<li>Auswahlfenster erscheint auch über Apps im Vollbild</li>
+<li>Umlaute im Safari-Kontextmenü korrigiert</li>
+</ul>
+      ]]></description>
+      <enclosure url="https://github.com/neobarthold/air-traffic/releases/download/v1.7/Air-Traffic-1.7.zip" length="5501863" type="application/octet-stream" sparkle:edSignature="NY0R5+x+hvBGQXrb7qJRR1Sww29HgCU4vEyKaKgmvzAIBCwl23cXhcvRHARiWz8a5qnTTrLVYphdkFHGCACKDw=="/>
+    </item>
+    <item>
       <title>Version 1.6</title>
       <pubDate>Thu, 05 Nov 2026 23:02:21 +0000</pubDate>
       <sparkle:version>4</sparkle:version>
