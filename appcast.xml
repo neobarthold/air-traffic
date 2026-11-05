@@ -6,6 +6,20 @@
     <description>Updates für Air Traffic</description>
     <language>de</language>
     <item>
+      <title>Version 1.5</title>
+      <pubDate>Thu, 05 Nov 2026 22:36:35 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Mit Developer ID (Neoskop GmbH) signiert und von Apple notarisiert – kein Rechtsklick → Öffnen mehr nötig</li>
+<li>Release-Ablauf mit automatischer Notarisierung</li>
+</ul>
+      ]]></description>
+      <enclosure url="https://github.com/neobarthold/air-traffic/releases/download/v1.5/Air-Traffic-1.5.zip" length="5109477" type="application/octet-stream" sparkle:edSignature="LxyGC8WQutU2e8WRr2hc4GlVVzoYwxOnVIHQaI9mGv0DAQfDnBTCKvbXk/9EsITAAqMh2NU2X7gknwCvklD+BQ=="/>
+    </item>
+    <item>
       <title>Version 1.4</title>
       <pubDate>Thu, 05 Nov 2026 22:04:10 +0000</pubDate>
       <sparkle:version>2</sparkle:version>
