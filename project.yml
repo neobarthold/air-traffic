@@ -11,8 +11,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "15.0"
     # Gilt für App und Safari-Erweiterung (Versionen müssen gleich sein); scripts/release.sh setzt sie.
-    MARKETING_VERSION: "1.7"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "1.6"
+    CURRENT_PROJECT_VERSION: "4"
 
 packages:
   AirTrafficCore:

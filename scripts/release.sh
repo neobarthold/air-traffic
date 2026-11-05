@@ -159,7 +159,8 @@ echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle und Safari-Erweiterung eingeb
 # Signiert von innen nach außen (Sparkle-Helfer → Framework → Safari-Erweiterung → App), Hardened Runtime + Zeitstempel,
 # dann Notarisierung bei Apple und Ticket an die App heften. Mit --no-sign entfällt alles (nur Probelauf).
 if [[ $NO_SIGN -eq 0 ]]; then
-  security find-identity -v -p codesigning | grep -q "$DEVELOPER_ID" \
+  IDENTITIES="$(security find-identity -v -p codesigning)"
+  grep -q "$DEVELOPER_ID" <<<"$IDENTITIES" \
     || die "Developer-ID-Zertifikat $DEVELOPER_ID nicht im Schlüsselbund"
   step "Developer-ID-Signatur ($DEVELOPER_ID)"
   sign() { codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID" "$@"; }
@@ -179,8 +180,11 @@ if [[ $NO_SIGN -eq 0 ]]; then
   if grep -q "get-task-allow" <<<"$APPEX_SIGNED_ENTITLEMENTS"; then
     die "Safari-Erweiterung trägt noch get-task-allow"
   fi
-  codesign -dv "$APP" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || die "TeamIdentifier ist nicht $TEAM_ID"
-  codesign -dv "$APPEX" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || die "TeamIdentifier der Safari-Erweiterung ist nicht $TEAM_ID"
+  # Ausgabe erst einsammeln: `cmd | grep -q` kann mit pipefail per SIGPIPE scheitern.
+  APP_SIGN_INFO="$(codesign -dv "$APP" 2>&1)"
+  grep -q "TeamIdentifier=$TEAM_ID" <<<"$APP_SIGN_INFO" || die "TeamIdentifier ist nicht $TEAM_ID"
+  APPEX_SIGN_INFO="$(codesign -dv "$APPEX" 2>&1)"
+  grep -q "TeamIdentifier=$TEAM_ID" <<<"$APPEX_SIGN_INFO" || die "TeamIdentifier der Safari-Erweiterung ist nicht $TEAM_ID"
 
   step "Notarisierung (Profil „$NOTARY_PROFILE“, dauert meist 1–5 min)"
   NOTARIZE_ZIP="$DIST/notarize-$VERSION.zip"
@@ -197,7 +201,8 @@ if [[ $NO_SIGN -eq 0 ]]; then
   fi
   echo "Notarisiert (ID $NOTARY_ID)"
   xcrun stapler staple "$APP" >/dev/null || die "stapler fehlgeschlagen"
-  spctl --assess --type execute -vv "$APP" 2>&1 | grep -q "Notarized Developer ID" \
+  SPCTL_OUT="$(spctl --assess --type execute -vv "$APP" 2>&1 || true)"
+  grep -q "Notarized Developer ID" <<<"$SPCTL_OUT" \
     || die "Gatekeeper akzeptiert die App nicht als notarisiert"
   echo "OK: Gatekeeper akzeptiert die App (Notarized Developer ID)"
 fi
