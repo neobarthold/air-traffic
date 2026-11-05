@@ -169,6 +169,11 @@ final class ChooserController: NSObject, NSWindowDelegate {
             NSSound.beep()
             return
         }
+        guard !AirTrafficURL.isAirTrafficURL(url) else {
+            state.hint = "airtraffic://-Links öffnet Air Traffic nicht selbst."
+            NSSound.beep()
+            return
+        }
         // ⌥ gedrückt → App nicht aktivieren.
         let activates = !NSEvent.modifierFlags.contains(.option)
         let app = state.browsers[target]

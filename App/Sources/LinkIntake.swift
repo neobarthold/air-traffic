@@ -16,12 +16,37 @@ final class LinkIntake {
         let context = Self.captureContext()
         Log.intake.info("\(urls.count) URL(s) von \(context.sourceBundleIdentifier ?? "unbekannt", privacy: .public)")
         for url in urls {
-            let decision = RuleEngine.decide(url: url, context: context, config: model.config)
-            for warning in decision.warnings {
-                Log.intake.warning("\(warning, privacy: .public)")
+            if AirTrafficURL.isAirTrafficURL(url) {
+                receiveAirTrafficURL(url, context: context)
+                continue
             }
-            opener.execute(decision, context: context)
+            let decision = RuleEngine.decide(url: url, context: context, config: model.config)
+            execute(decision, context: context)
         }
+    }
+
+    /// `airtraffic://open?url=…[&source=…][&prompt=1]` (SPEC §20.1), z. B. aus der Safari-Erweiterung.
+    private func receiveAirTrafficURL(_ url: URL, context: LinkContext) {
+        let request: AirTrafficURL.Request
+        do throws(AirTrafficURL.ParseError) {
+            request = try AirTrafficURL.parse(url)
+        } catch {
+            Log.intake.error("airtraffic-Link ignoriert: \(error.description, privacy: .public)")
+            return
+        }
+        let linkContext = request.context(from: context)
+        Log.intake.info(
+            "airtraffic-Link, Quelle \(linkContext.sourceBundleIdentifier ?? "unbekannt", privacy: .public), Auswahl: \(request.prompt)"
+        )
+        let decision = AirTrafficURL.decide(request, context: context, config: model.config)
+        execute(decision, context: linkContext)
+    }
+
+    private func execute(_ decision: Decision, context: LinkContext) {
+        for warning in decision.warnings {
+            Log.intake.warning("\(warning, privacy: .public)")
+        }
+        opener.execute(decision, context: context)
     }
 
     /// Quell-App (aus dem aktuellen Apple Event), Modifier, laufende Apps.

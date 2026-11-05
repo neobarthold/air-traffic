@@ -14,6 +14,11 @@ final class Opener {
 
     func execute(_ decision: Decision, context: LinkContext) {
         let url = decision.finalURL
+        // Schleifenschutz (§20.1): Air Traffic öffnet `airtraffic://` nie selbst – auch nicht nach Umschreibungen.
+        guard !AirTrafficURL.isAirTrafficURL(url) else {
+            Log.opener.error("airtraffic-Link als Ziel verworfen (Schleifenschutz)")
+            return
+        }
         let request = ChooserRequest(
             url: url,
             sourceBundleIdentifier: context.sourceBundleIdentifier,
@@ -60,6 +65,10 @@ final class Opener {
     /// Öffnet die URL mit der App. `false`, wenn die App nicht auffindbar ist.
     @discardableResult
     func open(_ url: URL, with app: AppRef, activates: Bool) -> Bool {
+        guard !AirTrafficURL.isAirTrafficURL(url) else {
+            Log.opener.error("airtraffic-Link als Ziel verworfen (Schleifenschutz)")
+            return false
+        }
         guard let appURL = Apps.url(for: app), !Apps.isSelf(appURL) else {
             Log.opener.error("App nicht gefunden: \(app.displayName, privacy: .public) (\(app.path, privacy: .public))")
             return false

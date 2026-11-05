@@ -3,7 +3,8 @@
 #
 #   scripts/release.sh <version> [--notes "<Text>"] [--dry-run] [--no-sign]
 #
-# Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → Developer-ID-Signatur →
+# Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → Developer-ID-Signatur
+# (inkl. Safari-Erweiterung) →
 # Notarisierung + Staple → ZIP → Sparkle-Signatur
 # (sign_update --account air-traffic, Schlüssel aus dem Schlüsselbund) → appcast.xml ergänzen →
 # gh release create v<version>. Commit und Push macht das Skript nicht; es druckt die nächsten Befehle.
@@ -37,7 +38,7 @@ die() { echo "Fehler: $*" >&2; exit 1; }
 step() { printf '\n▸ %s\n' "$*"; }
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -134,11 +135,28 @@ PLIST="$APP/Contents/Info.plist"
 [[ "$(plutil -extract CFBundleVersion raw "$PLIST")" == "$BUILD" ]] || die "CFBundleVersion passt nicht"
 plutil -extract SUPublicEDKey raw "$PLIST" >/dev/null || die "SUPublicEDKey fehlt in Info.plist"
 [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]] || die "Sparkle.framework ist nicht eingebettet"
+# Safari-Erweiterung (SPEC §20): eingebettet, gleiche Version wie die App, mit Sandbox.
+APPEX="$APP/Contents/PlugIns/SafariExtension.appex"
+APPEX_ENTITLEMENTS="$ROOT/SafariExtension/SafariExtension.entitlements"
+[[ -d "$APPEX" ]] || die "SafariExtension.appex ist nicht eingebettet"
+[[ -f "$APPEX_ENTITLEMENTS" ]] || die "Entitlements der Erweiterung fehlen: $APPEX_ENTITLEMENTS"
+[[ "$(plutil -extract CFBundleIdentifier raw "$APPEX/Contents/Info.plist")" == "de.neoskop.AirTraffic.SafariExtension" ]] \
+  || die "Bundle-ID der Safari-Erweiterung passt nicht"
+[[ "$(plutil -extract CFBundleShortVersionString raw "$APPEX/Contents/Info.plist")" == "$VERSION" ]] \
+  || die "Version der Safari-Erweiterung passt nicht"
+# Prüft, dass die appex signiert ist und die Sandbox trägt (Pflicht für Safari-Erweiterungen).
+check_appex() {
+  codesign --verify --strict "$APPEX" || die "Signatur der Safari-Erweiterung ungültig"
+  local entitlements
+  entitlements="$(codesign -d --entitlements - "$APPEX" 2>&1)" || die "Entitlements der Safari-Erweiterung nicht lesbar"
+  grep -q "com.apple.security.app-sandbox" <<<"$entitlements" || die "Safari-Erweiterung ohne App-Sandbox signiert"
+}
 codesign --verify --deep --strict "$APP" || die "Code-Signatur ungültig"
-echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle eingebettet"
+check_appex
+echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle und Safari-Erweiterung eingebettet"
 
 # --- Developer ID + Notarisierung ---------------------------------------------
-# Signiert von innen nach außen (Sparkle-Helfer → Framework → App), Hardened Runtime + Zeitstempel,
+# Signiert von innen nach außen (Sparkle-Helfer → Framework → Safari-Erweiterung → App), Hardened Runtime + Zeitstempel,
 # dann Notarisierung bei Apple und Ticket an die App heften. Mit --no-sign entfällt alles (nur Probelauf).
 if [[ $NO_SIGN -eq 0 ]]; then
   security find-identity -v -p codesigning | grep -q "$DEVELOPER_ID" \
@@ -151,9 +169,18 @@ if [[ $NO_SIGN -eq 0 ]]; then
     if [[ "$helper" == *Downloader.xpc ]]; then sign --preserve-metadata=entitlements "$helper"; else sign "$helper"; fi
   done
   sign "$APP/Contents/Frameworks/Sparkle.framework"
+  # Safari-Erweiterung vor der App, mit eigenen Entitlements (nur App-Sandbox).
+  sign --entitlements "$APPEX_ENTITLEMENTS" "$APPEX"
   sign "$APP"
   codesign --verify --deep --strict "$APP" || die "Developer-ID-Signatur ungültig"
+  check_appex
+  # Notarisierung lehnt get-task-allow ab; die Debug-Entitlements aus dem Build dürfen nicht überleben.
+  APPEX_SIGNED_ENTITLEMENTS="$(codesign -d --entitlements - "$APPEX" 2>&1)"
+  if grep -q "get-task-allow" <<<"$APPEX_SIGNED_ENTITLEMENTS"; then
+    die "Safari-Erweiterung trägt noch get-task-allow"
+  fi
   codesign -dv "$APP" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || die "TeamIdentifier ist nicht $TEAM_ID"
+  codesign -dv "$APPEX" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || die "TeamIdentifier der Safari-Erweiterung ist nicht $TEAM_ID"
 
   step "Notarisierung (Profil „$NOTARY_PROFILE“, dauert meist 1–5 min)"
   NOTARIZE_ZIP="$DIST/notarize-$VERSION.zip"

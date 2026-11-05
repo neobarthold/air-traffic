@@ -2,7 +2,7 @@ import AirTrafficCore
 import AppKit
 
 /// `--decide <url> [--source <bundleID>]`: lädt die Konfiguration, druckt die `Decision`
-/// als JSON auf stdout und öffnet nichts. Schreibt keine Konfiguration (auch nicht beim Erststart).
+/// als JSON auf stdout und öffnet nichts. `<url>` darf auch ein `airtraffic://open?…`-Link sein (§20.1). Schreibt keine Konfiguration (auch nicht beim Erststart).
 @MainActor
 enum DecideCommand {
     static let flag = "--decide"
@@ -32,7 +32,18 @@ enum DecideCommand {
             modifiers: [],
             runningBundleIdentifiers: Apps.runningBundleIdentifiers()
         )
-        let decision = RuleEngine.decide(url: url, context: context, config: config)
+        let decision: Decision
+        if AirTrafficURL.isAirTrafficURL(url) {
+            // Wie ein eingehender airtraffic://-Link (§20.1); öffnet nichts.
+            do throws(AirTrafficURL.ParseError) {
+                decision = AirTrafficURL.decide(try AirTrafficURL.parse(url), context: context, config: config)
+            } catch {
+                printError("airtraffic-Link ignoriert: \(error.description)")
+                return 65
+            }
+        } else {
+            decision = RuleEngine.decide(url: url, context: context, config: config)
+        }
 
         do {
             var data = try ConfigStore.makeEncoder().encode(decision)

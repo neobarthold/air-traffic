@@ -21,6 +21,7 @@ Standardaktion – zum Beispiel ein kleines Auswahlfenster mit allen Browsern.
   - OpenRouter (eigener API-Key),
   - Claude-Abo über die installierte Claude-Code-CLI,
   - ChatGPT-Abo über die installierte Codex-CLI.
+- **Safari-Erweiterung:** schickt Links aus Safari per Rechtsklick oder Symbolleisten-Knopf an Air Traffic.
 - **Choosy-Import:** übernimmt Regeln und Browserliste aus Choosy.
 - **Updates:** prüft täglich auf neue Versionen (Sparkle) und installiert sie automatisch –
   sobald weder Auswahlfenster noch Einstellungen offen sind.
@@ -46,6 +47,27 @@ Alle Screenshots stammen aus der neutralen Beispiel-Konfiguration [`docs/demo-co
 
 Voraussetzung: macOS 15 oder neuer.
 
+## Safari-Erweiterung
+
+Links, die du in Safari anklickst, öffnet Safari selbst – sie gehen nicht über den Standardbrowser,
+deine Regeln greifen also nicht. Die mitgelieferte Erweiterung schickt solche Links gezielt an Air Traffic.
+
+**Aktivieren:** Air Traffic → Einstellungen → **Allgemein** → Abschnitt „Safari-Erweiterung“ →
+„In Safari aktivieren …“, dort „Air Traffic“ einschalten. Alternativ direkt in Safari → Einstellungen →
+Erweiterungen. Der Abschnitt in Air Traffic zeigt, ob die Erweiterung aktiv ist.
+
+**Bedienung:**
+
+- Rechtsklick auf einen Link → **Mit Air Traffic öffnen**: läuft durch deine Regeln wie jeder andere Link.
+  Als Quell-App gilt Safari (`com.apple.Safari`).
+- Rechtsklick auf einen Link → **Mit Air Traffic auswählen …**: Umschreibungen der passenden Regel
+  werden angewendet, dann erscheint immer das Auswahlfenster mit allen Browsern.
+- **Symbolleisten-Knopf** (Air-Traffic-Symbol): öffnet die aktuelle Seite mit Air Traffic.
+
+Die Erweiterung braucht keinen Zugriff auf Webseiten: Sie liest nur den angeklickten Link bzw. die
+URL des aktiven Tabs und übergibt sie über das URL-Schema
+`airtraffic://open?url=<prozentkodiert>[&source=<bundleID>][&prompt=1]` an die App.
+
 ## Bauen aus dem Quellcode
 
 Benötigt Xcode 27 und [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
@@ -63,9 +85,17 @@ Swift-Package (Version 2.10.1) und wird beim ersten Build geladen.
 Aufbau:
 
 - `App/` – AppKit-App mit SwiftUI-Ansichten (Auswahlfenster, Einstellungen, Updates).
+- `SafariExtension/` – Safari-Web-Extension (Manifest V3, `background.js`) und
+  `SafariWebExtensionHandler`; wird als `Contents/PlugIns/SafariExtension.appex` eingebettet.
 - `Packages/AirTrafficCore/` – Regeln, Umschreiben, Konfiguration, Choosy-Import, KI-Assistent;
   nur Foundation, vollständig getestet.
 - `docs/SPEC.md` – Spezifikation.
+
+**Safari-Erweiterung beim Entwickeln:** Debug-Builds sind nur ad hoc signiert. Safari lädt die
+Erweiterung dann erst nach Safari → Einstellungen → Erweitert → „Funktionen für Webentwickler einblenden“
+und Entwickler → „Nicht signierte Erweiterungen erlauben“ (gilt bis zum Beenden von Safari).
+Ist zusätzlich eine installierte Air Traffic in `/Programme` vorhanden, entscheidet macOS, welche Kopie
+`airtraffic://` öffnet – zum Testen nur eine Kopie registriert lassen.
 
 ## Tests
 
@@ -85,6 +115,8 @@ APP="build/Build/Products/Debug/Air Traffic.app/Contents/MacOS/Air Traffic"
 
 # Entscheidung für eine URL als JSON (welche Regel, Ergebnis-URL, Aktion)
 "$APP" --decide "https://github.com/acme/webshop/pull/42" [--source com.tinyspeck.slackmacgap]
+# … auch für airtraffic://-Links, wie sie die Safari-Erweiterung schickt (öffnet nichts)
+"$APP" --decide "airtraffic://open?url=https%3A%2F%2Fgithub.com%2Facme%2Fwebshop%2Fpull%2F42&source=com.apple.Safari&prompt=1"
 
 # KI-Vorschlag als JSON (Anbieter sonst aus der Konfiguration)
 "$APP" --suggest-regex "Ersetze github.com durch review.example.com" \
@@ -107,7 +139,8 @@ scripts/release.sh 1.4 --dry-run --no-sign     # nur bauen
 ```
 
 Das Skript setzt `MARKETING_VERSION` und `CURRENT_PROJECT_VERSION` (Build + 1) in `project.yml`, baut
-die Release-Version, packt `build/dist/Air-Traffic-<version>.zip`, signiert es mit Sparkles
+die Release-Version, signiert sie mit Developer ID (Safari-Erweiterung zuerst, mit ihren Sandbox-Entitlements)
+und lässt sie notarisieren, packt `build/dist/Air-Traffic-<version>.zip`, signiert es mit Sparkles
 `sign_update` (EdDSA-Schlüssel im Schlüsselbund, Account `air-traffic`; die Werkzeuge lädt es bei Bedarf
 nach `build/sparkle-tools`), ergänzt `appcast.xml` und legt das GitHub-Release `v<version>` mit dem ZIP
 an. Commit und Push macht es nicht – es druckt die Befehle dafür. Erst mit dem Push von `appcast.xml`
@@ -116,6 +149,8 @@ sehen installierte Apps das Update.
 ## Datenschutz
 
 - Air Traffic sendet Links nirgendwohin: Regeln, Umschreibungen und Tests laufen lokal.
+- Die Safari-Erweiterung hat keine Website-Berechtigungen und kein Content-Script; sie sieht nur den
+  Link, den du per Rechtsklick oder Symbolleisten-Knopf an Air Traffic schickst.
 - Der KI-Assistent arbeitet **nur auf Klick** (✦ im Regel-Editor). Gesendet werden dann nur deine
   Beschreibung und die Beispiel-URLs – an OpenRouter bzw. über die lokale CLI an Anthropic oder OpenAI.
 - Der OpenRouter-API-Key liegt nur im macOS-Schlüsselbund, nie in der Konfigurationsdatei oder im Log.

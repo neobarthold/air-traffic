@@ -32,6 +32,8 @@ struct GeneralSettingsView: View {
                     }
                 }
 
+                SafariExtensionSettingsSection()
+
                 AssistantSettingsSection(model: model)
 
                 UpdatesSettingsSection(updates: model.updates)
