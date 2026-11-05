@@ -1,0 +1,35 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.07059,0.24706,0.22353,1.00000",
+      "srgb:0.02745,0.12157,0.14118,1.00000"
+    ],
+    "orientation" : {
+      "start" : { "x" : 0.4, "y" : 0 },
+      "stop" : { "x" : 0.6, "y" : 1 }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        { "image-name" : "arrow.svg", "name" : "arrow", "glass" : true }
+      ],
+      "name" : "Pfeil",
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
+      "specular" : true,
+      "translucency" : { "enabled" : true, "value" : 0.3 }
+    },
+    {
+      "layers" : [
+        { "image-name" : "sweep.svg", "name" : "sweep", "glass" : false },
+        { "image-name" : "rings.svg", "name" : "rings", "glass" : false }
+      ],
+      "name" : "Radar",
+      "shadow" : { "kind" : "none", "opacity" : 0 },
+      "translucency" : { "enabled" : false, "value" : 0 }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

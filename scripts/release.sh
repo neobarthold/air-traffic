@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Release von Air Traffic (SPEC §17).
+#
+#   scripts/release.sh <version> [--notes "<Text>"] [--dry-run] [--no-sign]
+#
+# Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → ZIP → Sparkle-Signatur
+# (sign_update --account air-traffic, Schlüssel aus dem Schlüsselbund) → appcast.xml ergänzen →
+# gh release create v<version>. Commit und Push macht das Skript nicht; es druckt die nächsten Befehle.
+#
+#   --notes "<Text>"  Release-Notes (Markdown, „- “ = Aufzählung). Sonst Abschnitt „## <version>“ aus CHANGELOG.md.
+#   --dry-run         Nur bauen und signieren: project.yml und appcast.xml bleiben unverändert,
+#                     kein GitHub-Release. Vorschau des Appcasts nach build/dist/appcast.dry-run.xml.
+#   --no-sign         Nur mit --dry-run: ohne Signatur (lädt keine Sparkle-Werkzeuge).
+set -euo pipefail
+
+SPARKLE_VERSION="2.10.1"
+SPARKLE_SHA256="1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27"
+SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+SIGNING_ACCOUNT="air-traffic"
+REPO_SLUG="neobarthold/air-traffic"
+MIN_SYSTEM_VERSION="15.0"
+APP_NAME="Air Traffic"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+die() { echo "Fehler: $*" >&2; exit 1; }
+step() { printf '\n▸ %s\n' "$*"; }
+
+usage() {
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+# --- Argumente ---------------------------------------------------------------
+VERSION=""
+NOTES=""
+DRY_RUN=0
+NO_SIGN=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --notes) [[ $# -ge 2 ]] || die "--notes braucht einen Text"; NOTES="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --no-sign) NO_SIGN=1; shift ;;
+    -h|--help) usage 0 ;;
+    -*) die "Unbekannte Option $1" ;;
+    *) [[ -z "$VERSION" ]] || die "Nur eine Version angeben"; VERSION="$1"; shift ;;
+  esac
+done
+[[ -n "$VERSION" ]] || usage 64
+[[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || die "Version „$VERSION“ hat nicht die Form 1.4 oder 1.4.2"
+if [[ $NO_SIGN -eq 1 && $DRY_RUN -eq 0 ]]; then die "--no-sign nur zusammen mit --dry-run"; fi
+
+# --- Voraussetzungen -----------------------------------------------------------
+for tool in xcodegen xcodebuild ditto codesign plutil; do
+  command -v "$tool" >/dev/null || die "$tool fehlt"
+done
+if [[ $DRY_RUN -eq 0 ]]; then
+  command -v gh >/dev/null || die "gh (GitHub CLI) fehlt"
+  gh auth status >/dev/null 2>&1 || die "gh ist nicht angemeldet (gh auth login)"
+  if [[ -n "$(git status --porcelain)" ]]; then
+    die "Arbeitsbaum nicht sauber – erst committen (das Release soll einem Commit entsprechen)"
+  fi
+  if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then die "Tag v$VERSION existiert schon"; fi
+fi
+
+APPCAST="$ROOT/appcast.xml"
+if [[ -f "$APPCAST" ]] && grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "$APPCAST"; then
+  die "appcast.xml enthält Version $VERSION schon"
+fi
+
+# --- Release-Notes ------------------------------------------------------------
+if [[ -z "$NOTES" && -f CHANGELOG.md ]]; then
+  NOTES="$(awk -v v="$VERSION" '
+    $0 ~ "^## \\[?" v "\\]?([[:space:]]|$)" { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  ' CHANGELOG.md | sed -e '/./,$!d')"
+fi
+if [[ -z "${NOTES//[[:space:]]/}" ]]; then
+  [[ $DRY_RUN -eq 1 ]] || die "Keine Release-Notes: --notes angeben oder Abschnitt „## $VERSION“ in CHANGELOG.md anlegen"
+  NOTES="- Air Traffic $VERSION"
+fi
+
+# --- Versionen ----------------------------------------------------------------
+CURRENT_BUILD="$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION:[[:space:]]*"?([0-9]+)"?.*/\1/p' project.yml | head -1)"
+[[ -n "$CURRENT_BUILD" ]] || die "CURRENT_PROJECT_VERSION in project.yml nicht gefunden"
+HIGHEST_BUILD="$CURRENT_BUILD"
+if [[ -f "$APPCAST" ]]; then
+  while read -r b; do
+    if [[ -n "$b" && "$b" -gt "$HIGHEST_BUILD" ]]; then HIGHEST_BUILD="$b"; fi
+  done < <(sed -nE 's/.*<sparkle:version>([0-9]+)<\/sparkle:version>.*/\1/p' "$APPCAST")
+fi
+BUILD=$((HIGHEST_BUILD + 1))
+
+step "Version $VERSION (Build $BUILD)$([[ $DRY_RUN -eq 1 ]] && echo ' – Probelauf')"
+if [[ $DRY_RUN -eq 0 ]]; then
+  sed -i '' -E "s/^([[:space:]]*MARKETING_VERSION:[[:space:]]*).*/\1\"$VERSION\"/" project.yml
+  sed -i '' -E "s/^([[:space:]]*CURRENT_PROJECT_VERSION:[[:space:]]*).*/\1\"$BUILD\"/" project.yml
+  echo "project.yml aktualisiert"
+fi
+
+# --- Bauen --------------------------------------------------------------------
+step "xcodegen generate"
+xcodegen generate --quiet
+
+DERIVED="$ROOT/build/release"
+DIST="$ROOT/build/dist"
+LOG="$ROOT/build/release-build.log"
+mkdir -p "$DIST"
+step "Release-Build (Log: build/release-build.log)"
+if ! xcodebuild -project AirTraffic.xcodeproj -scheme AirTraffic -configuration Release \
+  -derivedDataPath "$DERIVED" \
+  MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
+  clean build >"$LOG" 2>&1; then
+  tail -30 "$LOG" >&2
+  die "Release-Build fehlgeschlagen"
+fi
+grep -E "warning: " "$LOG" | grep -v appintentsmetadataprocessor | sort -u | sed 's/^/  /' || true
+
+APP="$DERIVED/Build/Products/Release/$APP_NAME.app"
+[[ -d "$APP" ]] || die "App nicht gefunden: $APP"
+PLIST="$APP/Contents/Info.plist"
+[[ "$(plutil -extract CFBundleShortVersionString raw "$PLIST")" == "$VERSION" ]] || die "CFBundleShortVersionString passt nicht"
+[[ "$(plutil -extract CFBundleVersion raw "$PLIST")" == "$BUILD" ]] || die "CFBundleVersion passt nicht"
+plutil -extract SUPublicEDKey raw "$PLIST" >/dev/null || die "SUPublicEDKey fehlt in Info.plist"
+[[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]] || die "Sparkle.framework ist nicht eingebettet"
+codesign --verify --deep --strict "$APP" || die "Code-Signatur ungültig"
+echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle eingebettet, Signatur gültig (ad hoc)"
+
+# --- ZIP ----------------------------------------------------------------------
+ZIP_NAME="Air-Traffic-$VERSION.zip"
+ZIP="$DIST/$ZIP_NAME"
+step "ZIP: build/dist/$ZIP_NAME"
+rm -f "$ZIP"
+ditto -c -k --keepParent "$APP" "$ZIP"
+LENGTH="$(stat -f%z "$ZIP")"
+echo "$LENGTH Bytes"
+
+# --- Signieren ----------------------------------------------------------------
+SIGNATURE=""
+if [[ $NO_SIGN -eq 1 ]]; then
+  step "Signatur übersprungen (--no-sign)"
+  SIGNATURE="UNSIGNED-DRY-RUN"
+else
+  TOOLS="$ROOT/build/sparkle-tools"
+  SIGN_UPDATE="$TOOLS/bin/sign_update"
+  if [[ ! -x "$SIGN_UPDATE" ]]; then
+    step "Sparkle-Werkzeuge $SPARKLE_VERSION laden"
+    mkdir -p "$TOOLS"
+    ARCHIVE="$TOOLS/Sparkle-$SPARKLE_VERSION.tar.xz"
+    curl -fL --proto '=https' --retry 2 -o "$ARCHIVE" "$SPARKLE_URL"
+    echo "$SPARKLE_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null || { rm -f "$ARCHIVE"; die "Prüfsumme der Sparkle-Werkzeuge falsch"; }
+    tar -xJf "$ARCHIVE" -C "$TOOLS" ./bin
+    [[ -x "$SIGN_UPDATE" ]] || die "sign_update nach dem Entpacken nicht gefunden"
+  fi
+  step "Sparkle-Signatur (Schlüsselbund, Account $SIGNING_ACCOUNT)"
+  SIGN_OUTPUT="$("$SIGN_UPDATE" --account "$SIGNING_ACCOUNT" "$ZIP")" || die "sign_update fehlgeschlagen"
+  SIGNATURE="$(sed -nE 's/.*sparkle:edSignature="([^"]+)".*/\1/p' <<<"$SIGN_OUTPUT")"
+  SIGNED_LENGTH="$(sed -nE 's/.*length="([0-9]+)".*/\1/p' <<<"$SIGN_OUTPUT")"
+  [[ -n "$SIGNATURE" ]] || die "Keine Signatur in der Ausgabe von sign_update"
+  [[ "$SIGNED_LENGTH" == "$LENGTH" ]] || die "Länge laut sign_update ($SIGNED_LENGTH) ≠ ZIP ($LENGTH)"
+  echo "Signatur erstellt"
+fi
+
+# --- Appcast ------------------------------------------------------------------
+DOWNLOAD_URL="https://github.com/$REPO_SLUG/releases/download/v$VERSION/$ZIP_NAME"
+PUB_DATE="$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')"
+NOTES_MD="$DIST/release-notes-$VERSION.md"
+printf '%s\n' "$NOTES" >"$NOTES_MD"
+
+# Markdown (Absätze, „- “-Listen) → einfaches HTML für Sparkle.
+NOTES_HTML="$(awk '
+  function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
+  /^[[:space:]]*[-*][[:space:]]+/ {
+    if (!inlist) { print "<ul>"; inlist = 1 }
+    sub(/^[[:space:]]*[-*][[:space:]]+/, ""); print "<li>" esc($0) "</li>"; next
+  }
+  { if (inlist) { print "</ul>"; inlist = 0 } }
+  /^[[:space:]]*$/ { next }
+  /^#+[[:space:]]/ { sub(/^#+[[:space:]]+/, ""); print "<h3>" esc($0) "</h3>"; next }
+  { print "<p>" esc($0) "</p>" }
+  END { if (inlist) print "</ul>" }
+' "$NOTES_MD")"
+
+ITEM="$DIST/appcast-item-$VERSION.xml"
+cat >"$ITEM" <<EOF
+    <item>
+      <title>Version $VERSION</title>
+      <pubDate>$PUB_DATE</pubDate>
+      <sparkle:version>$BUILD</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>$MIN_SYSTEM_VERSION</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+$NOTES_HTML
+      ]]></description>
+      <enclosure url="$DOWNLOAD_URL" length="$LENGTH" type="application/octet-stream" sparkle:edSignature="$SIGNATURE"/>
+    </item>
+EOF
+
+SKELETON='<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Air Traffic</title>
+    <link>https://raw.githubusercontent.com/'"$REPO_SLUG"'/main/appcast.xml</link>
+    <description>Updates für Air Traffic</description>
+    <language>de</language>
+  </channel>
+</rss>'
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  TARGET="$DIST/appcast.dry-run.xml"
+  if [[ -f "$APPCAST" ]]; then cp "$APPCAST" "$TARGET"; else printf '%s\n' "$SKELETON" >"$TARGET"; fi
+else
+  TARGET="$APPCAST"
+  [[ -f "$TARGET" ]] || printf '%s\n' "$SKELETON" >"$TARGET"
+fi
+# Neuester Eintrag oben: vor dem ersten <item>, sonst vor </channel>.
+awk -v itemfile="$ITEM" '
+  !done && (/<item>/ || /<\/channel>/) { while ((getline line < itemfile) > 0) print line; done = 1 }
+  { print }
+' "$TARGET" >"$TARGET.tmp" && mv "$TARGET.tmp" "$TARGET"
+if command -v xmllint >/dev/null; then xmllint --noout "$TARGET" || die "Appcast ist kein gültiges XML"; fi
+step "Appcast: ${TARGET#"$ROOT/"}"
+
+# --- GitHub-Release -----------------------------------------------------------
+if [[ $DRY_RUN -eq 1 ]]; then
+  step "Probelauf fertig – nichts veröffentlicht, project.yml und appcast.xml unverändert"
+  echo "  ZIP:      build/dist/$ZIP_NAME"
+  echo "  Appcast:  build/dist/appcast.dry-run.xml"
+  exit 0
+fi
+
+step "GitHub-Release v$VERSION"
+gh release create "v$VERSION" "$ZIP" --repo "$REPO_SLUG" --title "$APP_NAME $VERSION" --notes-file "$NOTES_MD"
+
+cat <<EOF
+
+Fertig. Das ZIP liegt im Release v$VERSION. Damit Sparkle es findet, jetzt den Appcast veröffentlichen:
+
+  git add project.yml appcast.xml
+  git commit -m "Release $VERSION"
+  git push
+
+EOF
