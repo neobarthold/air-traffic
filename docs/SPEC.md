@@ -380,3 +380,36 @@ Neben OpenRouter kann der KI-Assistent (§12) ein bestehendes Abo über die **lo
 - Notarisierung mit `xcrun notarytool submit --keychain-profile air-traffic --wait`, danach `stapler staple` und Prüfung `spctl` („Notarized Developer ID“); erst dann ZIP und Sparkle-Signatur.
 - Zugangsdaten: notarytool-Profil `air-traffic` im Schlüsselbund (App-spezifisches Passwort), nie im Repo.
 - Zertifikat läuft am 1. 2. 2027 ab – vorher erneuern (Neoskop Account Holder/Admin). Bestehende Releases bleiben gültig.
+
+## 20. Safari-Erweiterung, Stufe 1 (v1.6)
+
+Links, die in Safari angeklickt werden, gehen nicht über den Standardbrowser. Die Erweiterung gibt sie gezielt an Air Traffic. **Nur Safari**; Chrome und automatisches Umleiten sind spätere Stufen.
+
+### 20.1 URL-Schema `airtraffic://`
+- `CFBundleURLTypes` um Schema `airtraffic` ergänzen (Rolle Viewer).
+- `airtraffic://open?url=<prozentkodiert>[&source=<bundleID>][&prompt=1]`:
+  - `url` muss http/https sein, sonst ignorieren + Log.
+  - `source` überschreibt die Quell-App für Regeln (Erweiterung sendet `com.apple.Safari`); fehlt sie, gilt die Absender-PID wie bisher.
+  - ohne `prompt`: normaler Ablauf (§5: Regeln → Umschreiben → Aktion). Mit `prompt=1`: Umschreibungen der passenden Regel anwenden, dann **immer** das Auswahlfenster (alle Browser).
+- Andere Hosts/Pfade unter `airtraffic://` ignorieren. Parsen als reine Funktion im Core (`AirTrafficURL.parse`) mit Tests (Kodierung, fehlende/ungültige `url`, `javascript:`/`file:` abweisen, `prompt`, `source`).
+- Schleifenschutz (Opener) gilt weiter; Air Traffic öffnet `airtraffic://` nie selbst.
+
+### 20.2 Safari-Web-Extension (neues Target `SafariExtension`, Typ `app-extension`, eingebettet unter `Contents/PlugIns`)
+- Bundle-ID `de.neoskop.AirTraffic.SafariExtension`, Anzeigename „Air Traffic“, Manifest V3, Icons aus dem App-Icon (16/32/48/96/128, Toolbar-Symbol als einfarbige Vorlage).
+- **Rechtsklick auf einen Link:** „Mit Air Traffic öffnen“ und „Mit Air Traffic auswählen …“ (`prompt=1`). **Symbolleisten-Knopf:** öffnet die aktuelle Seite mit Air Traffic (Klick) – kein Popup.
+- Übergabe per `browser.runtime.sendNativeMessage` an `SafariWebExtensionHandler` (in der Erweiterung), der die `airtraffic://`-URL mit `NSWorkspace.shared.open` öffnet – so erscheint keine Safari-Rückfrage. Erweiterung minimal berechtigt (`contextMenus`, `activeTab`, `nativeMessaging`), keine Host-Berechtigungen, kein Content-Script.
+- Entitlements der Erweiterung: `com.apple.security.app-sandbox` = YES (Pflicht für Safari-Erweiterungen); sonst nichts.
+- Die App bleibt ohne Sandbox.
+
+### 20.3 Einstellungen → Allgemein → neuer Abschnitt „Safari-Erweiterung“ (`safari`)
+- Status per `SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier:)`: Pill „Aktiv“ / „Nicht aktiviert“ / „Unbekannt“; Aktualisierung beim Öffnen und bei App-Aktivierung.
+- Knopf „In Safari aktivieren …“ → `SFSafariApplication.showPreferencesForExtension(withIdentifier:)`.
+- Kurzer Text: „Links, die du in Safari anklickst, gehen nicht über den Standardbrowser. Mit der Erweiterung schickst du sie per Rechtsklick oder Symbolleisten-Knopf an Air Traffic – dann greifen deine Regeln.“
+- `--snapshot` zeigt den Abschnitt.
+
+### 20.4 Release und Signatur
+- `scripts/release.sh` signiert die Erweiterung **vor** der App: `codesign --force --options runtime --timestamp --entitlements <Erweiterungs-Entitlements> --sign $DEVELOPER_ID …/Contents/PlugIns/SafariExtension.appex`; Prüfung, dass die appex eingebettet und signiert ist (`codesign -d --entitlements` enthält app-sandbox).
+- Debug-Builds bleiben ad hoc; Safari lädt die Erweiterung dann nur mit „Entwickler → Nicht signierte Erweiterungen erlauben“ (README-Hinweis für Entwickler).
+
+### 20.5 README
+- Abschnitt „Safari-Erweiterung“: Zweck, Aktivieren (Air Traffic → Allgemein → „In Safari aktivieren …“ bzw. Safari → Einstellungen → Erweiterungen), Bedienung.
