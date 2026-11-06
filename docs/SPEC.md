@@ -636,3 +636,49 @@ Grundlage: Security-Audit vom 2026-11-06 (zwei unabhängige Prüfer, Stand 1.8).
 ### 26.11 Abnahme
 - Build ohne Warnungen, alle Tests grün (neue Tests je Punkt), `--snapshot` (Debug) zeigt wartende Regel in Liste und Editor (hell/dunkel).
 - README: Abschnitt „Sicherheit“ (Freigabe, Schema-Regel, Grenzen) und Datenschutz ergänzen; Debug-Schalter nur Debug.
+
+## 27. Bugs und Performance nach Review (v1.9)
+
+Grundlage: zwei unabhängige Reviews vom 2026-11-06 (Stand `d55a974`). K = Core/CLI, A = App. Alle Punkte beheben, je mit Test, wo testbar.
+
+### 27.1 Abstürze und Datenverlust
+- **K1 SIGPIPE:** `ProcessJob` (`CLISupport.swift` ~216) schreibt stdin an ein Kind, das schon beendet sein kann → Prozess stirbt mit SIGPIPE (reproduziert: `/usr/bin/true` + 4 KB stdin, Exit 141). Fix: `F_SETNOSIGPIPE` auf dem Schreib-Deskriptor und `signal(SIGPIPE, SIG_IGN)` beim Start von App und CLI; EPIPE = normaler Fehler. Test: 50× `/usr/bin/true` mit 1 MB stdin.
+- **A1 Index-Binding in Listenzeilen:** `RuleRow(rule: $model.config.rules[index])` (`RulesSettingsView.swift` ~96) kann beim Schrumpfen der Liste außerhalb lesen. Fix: Zeile bekommt den Wert + Closure, die per ID schreibt.
+- **A2 Startfehler verliert Link:** `Opener` meldet Erfolg vor `NSWorkspace.open`-Completion. Fix: bei Fehler Auswahlfenster mit Hinweis (§5.3).
+- **A3 Verwaistes Auswahlfenster:** `showNext()` ohne `guard panel == nil` → zwei Panels. Fix: Guard.
+- **A13 KI-Übernahme per Index:** `apply` im KI-Sheet schreibt über festen Index; Task ohne Abbruch, Mehrfachklick. Fix: per ID schreiben, Task in `@State` halten und abbrechen.
+- **A15 Rückgängig:** Löschen, Duplizieren, Umsortieren, „Verwerfen“ in der App über `UndoManager` des Einstellungsfensters (⌘Z/⇧⌘Z); vor dem Löschen in der App zusätzlich eine Sicherung (`writeBackup`).
+
+### 27.2 Logik
+- **K2 Kurzschluss:** `.all` bricht beim ersten `false` ab, `.none` beim ersten `true`, `.any` beim ersten `true`; billige Bedingungen (Quell-App, Modifier, Linktyp, Host-Textvergleich) vor Regex/Platzhalter. Test: nicht passende Regel mit langsamer Regex darf das Budget folgender Regeln nicht verbrauchen.
+- **K3 Parität check/test ↔ decide:** gemeinsame Auswertung `evaluateRule(…) -> (results, timedOut)`; Timeout = trifft nicht in allen drei; `check` nutzt ein Budget und wiederverwendet die Auswertung aus `decide`. Test: `.none`/`.any` mit Timeout → `check.matches == (decide.matchedRuleID == id)`.
+- **K4 Wartende Regel:** `effective` = aktuelle Regel, nur `rewrites` und `action` aus `previous` (passt zu Doku: Name/Bedingungen/Test-URL wirken sofort). Neu angelegte bleiben übersprungen.
+- **K5 Verwerfen behält An/Aus:** `discard` übernimmt `enabled` der aktuellen Regel.
+- **K6 Choosy:** deaktiviertes TRUEPREDICATE am Ende wird nicht zur Standardaktion, sondern deaktivierte Regel ohne Bedingungen + Hinweis.
+- **K7 Platzhalter Groß/Klein:** volle Faltung (`folding(.caseInsensitive)`) für Muster-Literale und Text; Äquivalenz mit alter Regex inkl. `ß/SS`, `ς/Σ`, `ﬀ/FF`.
+- **K8 Lesebefehle bei fehlender Config:** Exit 66 statt „Keine Regeln“/65.
+- **K11 Schema-Regel:** nur Vorlagen tatsächlich angewendeter (Text verändernder) Umschreibungen zählen für das literale Schema.
+- **K12 MCP-IDs:** Request-ID roh zurückgeben (Ganzzahl ohne Double-Verlust, String); `2025-03-26` nicht mehr als unterstützte Version aushandeln (keine Batches).
+- **K13 Regel ohne `id`:** beim Laden einmal vergeben und zurückschreiben (App und `modify`), damit IDs stabil sind.
+- **K14 `since`:** Millisekunden gerundet formatieren (Roundtrip byte-stabil).
+- **K15 Prozess-Rennen:** Start unter Lock markieren, nach `run()` erneut auf Abbruch prüfen; Timeout nur werten, solange der Prozess lief.
+- **K16 Sperre:** App-Auflösung (LaunchServices) außerhalb von `modify`; unter der Sperre nur Einfügen/Ersetzen.
+- **K17 Tests:** `regexCacheReturnsSameInstance` nicht vom globalen Cache abhängig machen; fehlende Tests aus K1–K8 ergänzen.
+- **A4 IDN:** Host-Bedingungen vergleichen gegen Unicode- und Punycode-Form (`bücher.de` == `xn--bcher-kva.de`); Auswahlfenster ermittelt den Host in derselben Kodierung wie der angezeigte Text, Anzeige in Unicode; „+“ im Prüfmodus legt Unicode-Host an.
+- **A5 „Teste Verbindung …“ hängt nach Tab-Wechsel:** `testing = false` in `defer` bzw. `onDisappear`.
+- **A10 Löschen bei Filter:** nächste Auswahl aus den sichtbaren Regeln (auch nach „Verwerfen“).
+- **A11 Import „Ersetzen“:** Auswahl zurücksetzen wie bei externem Neuladen.
+- **A12 Neuladen von außen:** Editor nur neu aufbauen, wenn sich die ausgewählte Regel auf der Platte geändert hat.
+- **A16 Fensterposition:** `center()` nur ohne gespeicherten Autosave-Rahmen.
+- **A17 Login-Shell-PATH:** `nil` nicht cachen; Cache bei `didBecomeActive` bzw. „Erneut suchen“ leeren.
+- **A18 Kontrast dunkel:** „Freigabe nötig“-Chip in Auswahlzeile und Knopf „Freigeben“ ≥ 4,5:1 (dunkle Schrift auf Orange oder dunklere Fläche).
+- **A19 Doppelte Pfade:** Browser-/App-Listen nicht über `path` identifizieren (stabile ID/Offset); `remove` entfernt genau den gewählten Eintrag.
+- **A20 Bedingungszeilen:** stabile Identität statt Index (Fokus bleibt bei der richtigen Bedingung).
+
+### 27.3 Performance
+- **A6/A7 Regel-Tab:** Liste als eigene Subview mit vorab berechneten Zeilenmodellen (kein `if` im `ForEach`), Editor als eigene View; `id → index`-Dictionary; `check`/`filter` nur bei Änderung von Regeln, Suchtext oder Simulation neu (im Model zwischenspeichern); `checkLine` per Dictionary. Ziel: Warnung „reentrant operation in its NSTableView delegate“ verschwindet (vorher/nachher im `--snapshot`-Log prüfen) und 200 Regeln bleiben flüssig.
+- **A8 Icons/Namen:** Cache für `Apps.icon`/`displayName` (Pfad bzw. Bundle-ID), invalidieren bei App-Start/-Ende-Notifications; gleiche `NSImage`-Instanz zurückgeben.
+- **A9 Quell-App-Menü:** laufende Apps erst beim Öffnen holen bzw. per Notification zwischenspeichern.
+- **A14 Regex je Render:** Fehler/Regex/Validierung einmal je `body` berechnen (RewriteRow, ConditionRow, RegexAssistantSheet).
+- **K9 Regex-Cache:** LRU statt Komplett-Leeren bei 256; Größe 512.
+- **K10 Doppelte Regex-Arbeit:** Rewriter in einem Durchlauf; `test` leitet Zwischenschritte aus demselben Lauf ab.

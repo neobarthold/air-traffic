@@ -29,24 +29,70 @@ enum Apps {
         )
     }
 
-    static func icon(for ref: AppRef) -> NSImage {
-        if let url = url(for: ref) {
-            return NSWorkspace.shared.icon(forFile: url.path(percentEncoded: false))
+    // MARK: Cache (§27 A8, A9)
+
+    /// Icons und Namen je Bundle-ID bzw. Pfad; dieselbe `NSImage`-Instanz für dieselbe App.
+    /// Geleert, wenn Apps starten oder enden (dann können sich Pfad und Name ändern).
+    private static var iconCache: [String: NSImage] = [:]
+    private static var bundleIconCache: [String: NSImage?] = [:]
+    private static var nameCache: [String: String?] = [:]
+    private static var runningAppsCache: [AppRef]?
+    private static var observers: [NSObjectProtocol] = []
+
+    private static func observeWorkspaceIfNeeded() {
+        guard observers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { invalidateCaches() }
+            })
         }
-        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }
+
+    static func invalidateCaches() {
+        iconCache.removeAll()
+        bundleIconCache.removeAll()
+        nameCache.removeAll()
+        runningAppsCache = nil
+    }
+
+    private static func cacheKey(_ ref: AppRef) -> String {
+        if let id = ref.bundleIdentifier, !id.isEmpty { return "id:" + id.lowercased() }
+        return "path:" + ref.path
+    }
+
+    static func icon(for ref: AppRef) -> NSImage {
+        observeWorkspaceIfNeeded()
+        let key = cacheKey(ref)
+        if let cached = iconCache[key] { return cached }
+        let icon = url(for: ref).map { NSWorkspace.shared.icon(forFile: $0.path(percentEncoded: false)) }
+            ?? NSWorkspace.shared.icon(for: .applicationBundle)
+        iconCache[key] = icon
+        return icon
     }
 
     static func icon(forBundleIdentifier id: String) -> NSImage? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+        observeWorkspaceIfNeeded()
+        let key = id.lowercased()
+        if let cached = bundleIconCache[key] { return cached }
+        let icon = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
             .map { NSWorkspace.shared.icon(forFile: $0.path(percentEncoded: false)) }
+        bundleIconCache[key] = icon
+        return icon
     }
 
     static func displayName(forBundleIdentifier id: String) -> String? {
-        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first,
-           let name = running.localizedName {
-            return name
+        observeWorkspaceIfNeeded()
+        let key = id.lowercased()
+        if let cached = nameCache[key] { return cached }
+        let name: String? = if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first,
+                               let localized = running.localizedName {
+            localized
+        } else {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { appRef(for: $0).displayName }
         }
-        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { appRef(for: $0).displayName }
+        nameCache[key] = name
+        return name
     }
 
     /// Ob die URL auf Air Traffic selbst zeigt (Schleifenschutz).
@@ -94,13 +140,18 @@ enum Apps {
         return isSelf(current)
     }
 
-    /// Laufende Apps mit Oberfläche (für Quell-App-Picker).
+    /// Laufende Apps mit Oberfläche (für Quell-App-Picker); zwischengespeichert bis eine App
+    /// startet oder endet (§27 A9).
     static func runningRegularApps() -> [AppRef] {
-        NSWorkspace.shared.runningApplications
+        observeWorkspaceIfNeeded()
+        if let cached = runningAppsCache { return cached }
+        let apps = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.bundleURL != nil }
             .compactMap { $0.bundleURL.map(appRef(for:)) }
             .filter { $0.bundleIdentifier != nil && !isSelf($0) }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        runningAppsCache = apps
+        return apps
     }
 
     private static var installedAppsCache: [AppRef]?

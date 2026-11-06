@@ -46,8 +46,8 @@ public struct RuleCheckEntry: Sendable, Equatable {
     public var position: Int
     /// Bedingungen passen (unabhängig von `enabled`).
     public var matches: Bool
-    /// Index (0-basiert) der ersten nicht erfüllten Bedingung; nur bei MatchMode „alle“
-    /// und nicht passender Regel, sonst nil.
+    /// Index (0-basiert) der nicht erfüllten Bedingung, an der die Auswertung abbrach (billige
+    /// Bedingungen zuerst, §27 K2); nur bei MatchMode „alle“ und nicht passender Regel, sonst nil.
     public var firstFailedCondition: Int?
     public var status: RuleCheckStatus
 
@@ -79,21 +79,30 @@ public struct RuleCheckResult: Sendable, Equatable {
 extension RuleEngine {
     /// Prüft eine URL gegen alle Regeln (§22.5). Rein; ändert nichts.
     ///
-    /// Wartende Änderungen (§26.1) zählen nicht: geänderte Regeln werden im freigegebenen Stand
+    /// Wartende Änderungen (§26.1) zählen nicht: geänderte Regeln werden im wirksamen Stand
     /// geprüft, neu angelegte stehen als `pendingMatch` bzw. `noMatch` da.
+    ///
+    /// Ein Zeitbudget für alles (§27 K3): zuerst genau der Lauf von `decide` (dessen Auswertungen
+    /// wiederverwendet werden), danach mit dem Rest des Budgets die übrigen Regeln. Zeitlimit = trifft nicht.
     public static func check(url: URL, context: LinkContext, config: Config) -> RuleCheckResult {
-        let decision = decide(url: url, context: context, config: config)
-        let winner = decision.matchedRuleID
-        let tooLong = MatchLimits.isTooLong(url)
         let budget = MatchBudget()
+        let tooLong = MatchLimits.isTooLong(url)
+        let (decision, known) = decideTracking(url: url, context: context, config: config, budget: budget)
+        let winner = decision.matchedRuleID
+        let subject = tooLong ? nil : MatchSubject(url)
 
         let entries = config.rules.enumerated().map { index, stored in
             let rule = stored.effective ?? stored
-            var ignored: String?
-            let results = tooLong
-                ? rule.conditions.map { _ in false }
-                : rule.conditions.map { evaluate($0, url: url, context: context, error: &ignored, budget: budget) }
-            let matches = !tooLong && combine(results, mode: rule.match)
+            let matches: Bool
+            let firstFailed: Int?
+            if let subject {
+                let evaluation = known[index] ?? evaluateRule(rule, subject: subject, context: context, budget: budget)
+                matches = evaluation.matches
+                firstFailed = !matches && rule.match == .all ? evaluation.firstFailed : nil
+            } else {
+                matches = false
+                firstFailed = rule.match == .all && !rule.conditions.isEmpty ? 0 : nil
+            }
             let status: RuleCheckStatus = if !matches {
                 .noMatch
             } else if stored.effective == nil {
@@ -113,7 +122,7 @@ extension RuleEngine {
                 ruleID: rule.id,
                 position: index + 1,
                 matches: matches,
-                firstFailedCondition: !matches && rule.match == .all ? results.firstIndex(of: false) : nil,
+                firstFailedCondition: firstFailed,
                 status: status
             )
         }

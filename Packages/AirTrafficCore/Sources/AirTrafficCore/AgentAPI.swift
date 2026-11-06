@@ -27,9 +27,13 @@ public struct AgentAPI: Sendable {
 
     // MARK: Lesen
 
-    /// Aktuelle Konfiguration; fehlt die Datei, eine leere (nur lesen).
+    /// Aktuelle Konfiguration (nur lesen). Fehlt die Datei → `StoreError.missing` (Exit 66, §27 K8)
+    /// statt einer leeren Konfiguration, die wie „Keine Regeln“ aussähe.
     public func loadConfig() throws -> Config {
-        try store.loadSnapshot()?.config ?? Config()
+        guard let snapshot = try store.loadSnapshot() else {
+            throw ConfigStore.StoreError.missing(path: configPath)
+        }
+        return snapshot.config
     }
 
     public func listRules() throws -> AgentResult {
@@ -81,7 +85,7 @@ public struct AgentAPI: Sendable {
     public func createRule(_ json: JSONValue, position: Int? = nil, dryRun: Bool = false) throws -> AgentResult {
         var warnings: [String] = []
         let date = now()
-        let result = try store.modify(dryRun: dryRun, now: date) { config throws -> UUID in
+        let result = try modifyResolvingApps(dryRun: dryRun, now: date) { config, resolver throws -> UUID in
             let output = try RuleInput(resolver: resolver, browsers: config.browsers).makeRule(from: json)
             warnings = output.warnings
             let rule = RuleApproval.gate(old: nil, new: output.rule, now: date)
@@ -100,7 +104,7 @@ public struct AgentAPI: Sendable {
     public func updateRule(_ ref: String, patch: JSONValue, dryRun: Bool = false) throws -> AgentResult {
         var warnings: [String] = []
         let date = now()
-        let result = try store.modify(dryRun: dryRun, now: date) { config throws -> UUID in
+        let result = try modifyResolvingApps(dryRun: dryRun, now: date) { config, resolver throws -> UUID in
             let index = try RuleRef.resolve(ref, in: config.rules)
             let old = config.rules[index]
             let output = try RuleInput(resolver: resolver, browsers: config.browsers).apply(patch: patch, to: old)
@@ -114,6 +118,40 @@ public struct AgentAPI: Sendable {
             ruleID: result.value, config: result.config, dryRun: dryRun,
             written: result.written, backup: result.backupURL, warnings: warnings
         )
+    }
+
+    /// `ConfigStore.modify`, aber App-Auflösung (LaunchServices) außerhalb der Dateisperre (§27 K16):
+    /// Ein Probelauf auf dem aktuellen Stand sammelt alle Anfragen an den Resolver; unter der Sperre
+    /// werden sie nur nachgeschlagen. Hat sich die Datei dazwischen so geändert, dass eine neue Anfrage
+    /// nötig wäre, beginnt alles noch einmal (zuletzt mit direkter Auflösung).
+    private func modifyResolvingApps<Value: Sendable>(
+        dryRun: Bool, now date: Date,
+        _ change: (inout Config, any AppResolving) throws -> Value
+    ) throws -> ConfigModification<Value> {
+        let prefetching = PrefetchingResolver(base: resolver)
+        let attempts = 3
+        for attempt in 1...attempts {
+            prefetching.mode = .record
+            if var config = try store.loadSnapshot()?.config {
+                _ = try? change(&config, prefetching)
+            }
+            prefetching.mode = attempt == attempts ? .passThrough : .lookupOnly
+            do {
+                return try store.modify(dryRun: dryRun, now: date) { config in
+                    do {
+                        let value = try change(&config, prefetching)
+                        if prefetching.hadMiss { throw PrefetchingResolver.Miss() }
+                        return value
+                    } catch {
+                        if prefetching.hadMiss { throw PrefetchingResolver.Miss() }
+                        throw error
+                    }
+                }
+            } catch is PrefetchingResolver.Miss {
+                continue
+            }
+        }
+        throw CocoaError(.fileWriteUnknown)
     }
 
     public func moveRule(_ ref: String, to position: Int, dryRun: Bool = false) throws -> AgentResult {
@@ -432,4 +470,57 @@ public struct AgentAPI: Sendable {
         let home = NSHomeDirectory()
         return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
+}
+
+// MARK: - App-Auflösung vor der Sperre (§27 K16)
+
+/// Merkt sich Antworten eines Resolvers. `record`: fragt und merkt; `lookupOnly`: nur Gemerktes, eine
+/// fehlende Antwort setzt `hadMiss` (der Lauf wird dann verworfen und wiederholt); `passThrough`: fragt
+/// bei Bedarf direkt.
+final class PrefetchingResolver: AppResolving, @unchecked Sendable {
+    enum Mode { case record, lookupOnly, passThrough }
+    struct Miss: Error {}
+
+    private let base: any AppResolving
+    private let lock = NSLock()
+    private var apps: [String: AppRef?] = [:]
+    private var installed: [AppRef: Bool] = [:]
+    private var _mode = Mode.record
+    private var missed = false
+
+    init(base: any AppResolving) {
+        self.base = base
+    }
+
+    var mode: Mode {
+        get { lock.withLock { _mode } }
+        set { lock.withLock { _mode = newValue; missed = false } }
+    }
+
+    /// Unter der Sperre fehlte eine Antwort.
+    var hadMiss: Bool { lock.withLock { missed } }
+
+    private func lookup<Key: Hashable, Value>(
+        _ key: Key, in table: ReferenceWritableKeyPath<PrefetchingResolver, [Key: Value]>, compute: () -> Value, fallback: Value
+    ) -> Value {
+        lock.lock()
+        if let hit = self[keyPath: table][key] { lock.unlock(); return hit }
+        let mode = _mode
+        if mode == .lookupOnly { missed = true }
+        lock.unlock()
+        guard mode != .lookupOnly else { return fallback }
+        let value = compute()
+        lock.withLock { self[keyPath: table][key] = value }
+        return value
+    }
+
+    func resolveApp(_ query: String) -> AppRef? {
+        lookup(query, in: \.apps, compute: { base.resolveApp(query) }, fallback: nil)
+    }
+
+    func isInstalled(_ app: AppRef) -> Bool {
+        lookup(app, in: \.installed, compute: { base.isInstalled(app) }, fallback: true)
+    }
+
+    func installedBrowsers() -> [AppRef] { base.installedBrowsers() }
 }

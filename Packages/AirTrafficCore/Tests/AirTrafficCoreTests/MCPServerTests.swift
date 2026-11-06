@@ -25,9 +25,9 @@ struct MCPServerTests {
         let temp = try TempConfig()
         defer { temp.remove() }
         let server = server(temp)
-        let known = try request(server, "initialize", ["protocolVersion": "2025-03-26", "capabilities": [:], "clientInfo": ["name": "test", "version": "1"]])
+        let known = try request(server, "initialize", ["protocolVersion": "2024-11-05", "capabilities": [:], "clientInfo": ["name": "test", "version": "1"]])
         #expect(known["id"] == 1)
-        #expect(known["result"]?["protocolVersion"] == "2025-03-26")
+        #expect(known["result"]?["protocolVersion"] == "2024-11-05")
         #expect(known["result"]?["serverInfo"]?["name"] == "air-traffic")
         #expect(known["result"]?["serverInfo"]?["version"] == "1.8 (6)")
         #expect(known["result"]?["capabilities"]?["tools"] != nil)

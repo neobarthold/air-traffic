@@ -17,41 +17,58 @@ public enum Rewriter {
     /// Wendet die Rewrites nacheinander an. Ungültiger Regex, Zeitlimit, ein Ergebnis, das keine
     /// gültige URL ist, oder ein nicht erlaubtes Schema (§26.2) → Original-URL plus Warnung.
     public static func apply(_ rewrites: [Rewrite], to url: URL, budget: MatchBudget? = nil) -> Output {
-        guard !rewrites.isEmpty else { return Output(url: url, warnings: []) }
+        run(rewrites, on: url, budget: budget, collectSteps: false).output
+    }
+
+    /// Ein Durchlauf für Ergebnis und Zwischenschritte (§27 K10). `steps` (nur mit `collectSteps`)
+    /// enthält den Text nach jeder Umschreibung; eine fehlgeschlagene Umschreibung lässt den Text
+    /// unverändert, die folgenden laufen für die Anzeige weiter. Das Ergebnis ist dann die Original-URL.
+    static func run(
+        _ rewrites: [Rewrite], on url: URL, budget: MatchBudget?, collectSteps: Bool
+    ) -> (output: Output, steps: [String]) {
+        guard !rewrites.isEmpty else { return (Output(url: url, warnings: []), []) }
         let budget = budget ?? MatchBudget()
         var current = url.absoluteString
+        var steps: [String] = []
+        var failure: String?
+        /// Vorlagen der Umschreibungen, die den Text tatsächlich verändert haben (§27 K11).
+        var appliedTemplates: [String] = []
         for (index, rewrite) in rewrites.enumerated() {
             do {
-                current = try apply(rewrite, to: current, budget: budget)
+                let next = try apply(rewrite, to: current, budget: budget)
+                if next != current { appliedTemplates.append(rewrite.template) }
+                current = next
             } catch let Failure.invalidPattern(pattern, message) {
-                return Output(url: url, warnings: [
-                    "Umschreibung \(index + 1): ungültiger regulärer Ausdruck „\(pattern)“ (\(message)); Original-URL verwendet",
-                ])
+                failure = failure ?? "Umschreibung \(index + 1): ungültiger regulärer Ausdruck „\(pattern)“ (\(message)); Original-URL verwendet"
             } catch Failure.timeout {
-                return Output(url: url, warnings: [
-                    "Umschreibung \(index + 1): \(TextMatcher.timeoutMessage); Original-URL verwendet",
-                ])
+                failure = failure ?? "Umschreibung \(index + 1): \(TextMatcher.timeoutMessage); Original-URL verwendet"
             } catch {
-                return Output(url: url, warnings: ["Umschreibung \(index + 1): \(error); Original-URL verwendet"])
+                failure = failure ?? "Umschreibung \(index + 1): \(error); Original-URL verwendet"
+            }
+            if collectSteps {
+                steps.append(current)
+            } else if failure != nil {
+                break
             }
         }
+        if let failure { return (Output(url: url, warnings: [failure]), steps) }
         guard let result = validURL(current) else {
-            return Output(url: url, warnings: [
+            return (Output(url: url, warnings: [
                 "Umschreibung ergibt keine gültige URL („\(current)“); Original-URL verwendet",
-            ])
+            ]), steps)
         }
         let original = url.scheme?.lowercased() ?? ""
         let scheme = result.scheme?.lowercased() ?? ""
-        guard isAllowedScheme(scheme, original: original, templates: rewrites.map(\.template)) else {
-            return Output(url: url, warnings: [
-                "Umschreibung ergibt Schema „\(scheme):“ – erlaubt sind http/https, das Schema der Original-URL oder ein Schema, das literal am Anfang der Vorlage steht; Original-URL verwendet",
-            ])
+        guard isAllowedScheme(scheme, original: original, templates: appliedTemplates) else {
+            return (Output(url: url, warnings: [
+                "Umschreibung ergibt Schema „\(scheme):“ – erlaubt sind http/https, das Schema der Original-URL oder ein Schema, das literal am Anfang der Vorlage einer angewendeten Umschreibung steht; Original-URL verwendet",
+            ]), steps)
         }
         var notes: [String] = []
         if scheme != original {
             notes.append("Schemawechsel „\(original):“ → „\(scheme):“")
         }
-        return Output(url: result, warnings: [], notes: notes)
+        return (Output(url: result, warnings: [], notes: notes), steps)
     }
 
     /// Eine einzelne Umschreibung auf einen String; unverändert, wenn das Muster nicht trifft.
@@ -59,10 +76,10 @@ public enum Rewriter {
         try apply(rewrite, to: string, budget: MatchBudget())
     }
 
+    /// Ein Durchlauf über die Treffer (kein vorgeschaltetes `firstMatch`, §27 K10).
     static func apply(_ rewrite: Rewrite, to string: String, budget: MatchBudget?) throws -> String {
         let regex = try regex(for: rewrite)
         do {
-            guard try regex.firstMatch(in: string, budget: budget) != nil else { return string }
             return try regex.replacingMatches(in: string, template: rewrite.template, budget: budget)
         } catch is MatchTimeout {
             throw Failure.timeout

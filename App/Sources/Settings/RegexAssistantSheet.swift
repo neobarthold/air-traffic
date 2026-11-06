@@ -45,6 +45,8 @@ struct RegexAssistantSheet: View {
     @State private var error: String?
     @State private var task: Task<Void, Never>?
     @State private var isRunning = false
+    /// Schon übernommen: ein Doppelklick darf nicht zweimal einfügen (§27 A13).
+    @State private var applied = false
 
     init(
         request: RegexAssistantRequest,
@@ -75,18 +77,20 @@ struct RegexAssistantSheet: View {
     }
 
     var body: some View {
+        // Prüfung (Regex über alle Beispiele) einmal je Render, für Ergebnis und Fußzeile (§27 A14).
+        let validation = hasResult ? validation : nil
         VStack(alignment: .leading, spacing: 0) {
             header
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     inputSection
-                    if hasResult { resultSection }
+                    if let validation { resultSection(validation) }
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 10)
                 .padding(.bottom, 14)
             }
-            footer
+            footer(validation)
         }
         .frame(width: 640)
         .frame(minHeight: 420, idealHeight: 620, maxHeight: 620)
@@ -164,8 +168,7 @@ struct RegexAssistantSheet: View {
 
     // MARK: Ergebnis
 
-    @ViewBuilder private var resultSection: some View {
-        let validation = validation
+    @ViewBuilder private func resultSection(_ validation: RegexValidation) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 sectionTitle("Ergebnis")
@@ -293,7 +296,7 @@ struct RegexAssistantSheet: View {
 
     // MARK: Fußzeile
 
-    private var footer: some View {
+    private func footer(_ validation: RegexValidation?) -> some View {
         HStack(spacing: 8) {
             Text("Beispiele und Beschreibung gehen an \(recipient).")
                 .font(DS.small)
@@ -305,13 +308,16 @@ struct RegexAssistantSheet: View {
             }
             .keyboardShortcut(.cancelAction)
             Button("Übernehmen") {
+                guard !applied else { return }
+                applied = true
+                task?.cancel()
                 request.apply(pattern, isRewrite ? template : nil, examples)
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
             // ⏎ übernimmt nur, solange kein Eingabefeld fokussiert ist (dort bleibt ⏎ Zeilenumbruch/Absenden).
             .keyboardShortcut(inputFocused ? nil : .defaultAction)
-            .disabled(!hasResult || isRunning || !validation.patternCompiles)
+            .disabled(applied || isRunning || validation?.patternCompiles != true)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)

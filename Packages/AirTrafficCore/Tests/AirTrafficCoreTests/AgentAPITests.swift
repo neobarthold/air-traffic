@@ -123,10 +123,13 @@ struct AgentAPITests {
         #expect(browsers.json["otherInstalledBrowsers"]?.arrayValue?.isEmpty == true)
     }
 
-    @Test func missingConfigReadsEmptyButRefusesWrites() throws {
+    /// §27 K8: Lesen ohne Konfiguration ist ein Fehler (Exit 66), keine leere Liste.
+    @Test func missingConfigRefusesReadsAndWrites() throws {
         let temp = try TempConfig(nil)
         defer { temp.remove() }
-        #expect(try temp.api().listRules().json["count"] == 0)
+        #expect(throws: ConfigStore.StoreError.missing(path: temp.store.fileURL.path(percentEncoded: false))) {
+            try temp.api().listRules()
+        }
         #expect(throws: ConfigStore.StoreError.self) {
             try temp.api().createRule(["name": "X", "action": ["type": "prompt"]])
         }

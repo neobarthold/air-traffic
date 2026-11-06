@@ -4,7 +4,8 @@ import SwiftUI
 /// Tab „Browser“ (SPEC §15.7): Vorschau des Auswahlfensters und die geordnete Liste aus demselben Zustand.
 struct BrowsersSettingsView: View {
     @Bindable var model: AppModel
-    @State private var selection: String?
+    /// Ausgewählte Zeile als Position: Pfade können doppelt vorkommen (§27 A19).
+    @State private var selection: Int?
 
     private static let rowHeight: CGFloat = 50
 
@@ -63,7 +64,7 @@ struct BrowsersSettingsView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(model.config.browsers.enumerated()), id: \.element.path) { index, app in
+                        ForEach(Array(model.config.browsers.enumerated()), id: \.offset) { index, app in
                             BrowserTile(
                                 app: app,
                                 number: index < 9 ? index + 1 : nil,
@@ -88,11 +89,17 @@ struct BrowsersSettingsView: View {
 
     private var list: some View {
         List(selection: $selection) {
-            ForEach(Array(model.config.browsers.enumerated()), id: \.element.path) { index, app in
+            ForEach(Array(model.config.browsers.enumerated()), id: \.offset) { index, app in
                 BrowserRow(app: app, number: index + 1)
-                    .tag(app.path)
+                    .tag(index)
             }
-            .onMove { from, to in model.config.browsers.move(fromOffsets: from, toOffset: to) }
+            .onMove { from, to in
+                // Auswahl wandert mit der verschobenen Zeile.
+                var positions = Array(model.config.browsers.indices)
+                positions.move(fromOffsets: from, toOffset: to)
+                model.config.browsers.move(fromOffsets: from, toOffset: to)
+                if let selection { self.selection = positions.firstIndex(of: selection) }
+            }
         }
         .listStyle(.plain)
         .scrollDisabled(true)
@@ -112,15 +119,18 @@ struct BrowsersSettingsView: View {
     private func add() {
         guard let app = Apps.chooseApplication(message: "Browser oder App auswählen") else { return }
         guard !Apps.isSelf(app) else { return }
-        if !model.config.browsers.contains(where: { $0.refersToSameApp(as: app) }) {
+        if let existing = model.config.browsers.firstIndex(where: { $0.refersToSameApp(as: app) }) {
+            selection = existing
+        } else {
             model.config.browsers.append(app)
+            selection = model.config.browsers.count - 1
         }
-        selection = app.path
     }
 
+    /// Entfernt genau den gewählten Eintrag, nicht alle mit demselben Pfad (§27 A19).
     private func remove() {
-        guard let selection else { return }
-        model.config.browsers.removeAll { $0.path == selection }
+        guard let selection, model.config.browsers.indices.contains(selection) else { return }
+        model.config.browsers.remove(at: selection)
         self.selection = nil
     }
 

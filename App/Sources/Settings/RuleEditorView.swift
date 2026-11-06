@@ -18,6 +18,23 @@ struct RuleEditorView: View {
     @State private var simulatedModifiers: ModifierSet = []
     @State private var editorHeight: CGFloat = 560
     @State private var resultHeight: CGFloat = 20
+    /// Stabile Identität je Bedingung/Umschreibung statt Index (Fokus bleibt beim Löschen, §27 A20).
+    @State private var conditionIDs: [UUID] = []
+    @State private var rewriteIDs: [UUID] = []
+    /// Suche nach der KI-CLI vor dem Öffnen des Sheets; ein neuer Klick bricht die alte ab (§27 A13).
+    @State private var assistTask: Task<Void, Never>?
+    @Environment(\.undoManager) private var undoManager
+
+    init(rule: Binding<Rule>, model: AppModel, position: Int, onShowRule: @escaping (UUID) -> Void, checkURL: URL? = nil) {
+        _rule = rule
+        self.model = model
+        self.position = position
+        self.onShowRule = onShowRule
+        self.checkURL = checkURL
+        let current = rule.wrappedValue
+        _conditionIDs = State(initialValue: current.conditions.map { _ in UUID() })
+        _rewriteIDs = State(initialValue: current.rewrites.map { _ in UUID() })
+    }
 
     /// Test-URL der Regel (§14.1); leer = nil, damit nichts geschrieben wird.
     private var testURLText: Binding<String> {
@@ -67,7 +84,7 @@ struct RuleEditorView: View {
                         pending: pending,
                         testURL: testURL,
                         onApprove: { model.approveRule(rule.id) },
-                        onDiscard: { model.discardPendingChange(rule.id) }
+                        onDiscard: { model.discardPendingChange(rule.id, undoManager: undoManager) }
                     )
                 }
                 header
@@ -87,6 +104,7 @@ struct RuleEditorView: View {
                 makeAssistant: model.makeRegexAssistant
             )
         }
+        .onDisappear { assistTask?.cancel() }
         .alert(unavailableTitle, isPresented: $showKeyHint) {
             Button("Zu „Allgemein“") { model.settingsTab = .general }
             Button("Abbrechen", role: .cancel) {}
@@ -150,17 +168,19 @@ struct RuleEditorView: View {
             .fixedSize()
             .help("alle / irgendeine / keine Bedingung muss zutreffen")
         } content: {
-            ForEach(Array(rule.conditions.indices), id: \.self) { index in
+            let ids = StableIDs.sync(conditionIDs, count: rule.conditions.count)
+            ForEach(Array(ids.enumerated()), id: \.element) { index, id in
                 ConditionRow(
                     condition: .element(of: $rule.conditions, at: index, fallback: .linkType(.web)),
                     testResult: result.flatMap {
                         $0.conditionResults.indices.contains(index) ? $0.conditionResults[index] : nil
                     },
-                    onDelete: { if rule.conditions.indices.contains(index) { rule.conditions.remove(at: index) } },
+                    onDelete: { removeCondition(id) },
                     onAssist: { target, match in assistCondition(at: index, target: target, match: match) }
                 )
                 Divider()
             }
+            .onChange(of: ids) { conditionIDs = ids }
             if rule.conditions.isEmpty {
                 Text("Ohne Bedingungen passt die Regel immer.")
                     .font(DS.help)
@@ -168,6 +188,7 @@ struct RuleEditorView: View {
                     .padding(.vertical, 8)
             }
             TextLinkButton("Bedingung", symbol: "plus") {
+                conditionIDs = StableIDs.sync(conditionIDs, count: rule.conditions.count) + [UUID()]
                 rule.conditions.append(.host(TextMatch(op: .equals, value: "")))
             }
             .padding(.top, 8)
@@ -190,16 +211,19 @@ struct RuleEditorView: View {
             }
             .help("Neue Umschreibung mit KI beschreiben")
         } content: {
-            ForEach(Array(rule.rewrites.indices), id: \.self) { index in
+            let ids = StableIDs.sync(rewriteIDs, count: rule.rewrites.count)
+            ForEach(Array(ids.enumerated()), id: \.element) { index, id in
                 RewriteRow(
                     rewrite: .element(of: $rule.rewrites, at: index, fallback: Rewrite(pattern: "", template: "")),
                     number: rule.rewrites.count > 1 ? index + 1 : nil,
                     step: result.flatMap { rewriteStep($0, at: index) },
-                    onDelete: { if rule.rewrites.indices.contains(index) { rule.rewrites.remove(at: index) } },
+                    onDelete: { removeRewrite(id) },
                     onAssist: { assistRewrite(at: index) }
                 )
             }
+            .onChange(of: ids) { rewriteIDs = ids }
             TextLinkButton("Umschreibung", symbol: "plus") {
+                rewriteIDs = StableIDs.sync(rewriteIDs, count: rule.rewrites.count) + [UUID()]
                 rule.rewrites.append(Rewrite(pattern: "^(.*)$", template: "$1"))
             }
             .padding(.top, 8)
@@ -374,6 +398,21 @@ struct RuleEditorView: View {
         return RewriteStep(input: input, output: result.rewriteSteps[index])
     }
 
+    /// Entfernt genau die Zeile mit dieser Identität (§27 A20).
+    private func removeCondition(_ id: UUID) {
+        let ids = StableIDs.sync(conditionIDs, count: rule.conditions.count)
+        guard let index = ids.firstIndex(of: id), rule.conditions.indices.contains(index) else { return }
+        conditionIDs = ids.filter { $0 != id }
+        rule.conditions.remove(at: index)
+    }
+
+    private func removeRewrite(_ id: UUID) {
+        let ids = StableIDs.sync(rewriteIDs, count: rule.rewrites.count)
+        guard let index = ids.firstIndex(of: id), rule.rewrites.indices.contains(index) else { return }
+        rewriteIDs = ids.filter { $0 != id }
+        rule.rewrites.remove(at: index)
+    }
+
     // MARK: KI-Assistent
 
     /// Alert ohne Verfügbarkeit nennt den aktiven Anbieter (§16.4).
@@ -395,14 +434,17 @@ struct RuleEditorView: View {
     }
 
     private func openAssistant(_ request: RegexAssistantRequest) {
+        assistTask?.cancel()
+        assistTask = nil
         model.refreshAssistantKey()
         if model.assistantAvailable {
             assistRequest = request
             return
         }
-        // CLI evtl. nur über die Login-Shell auffindbar.
-        Task {
+        // CLI evtl. nur über die Login-Shell auffindbar. Ein weiterer Klick ersetzt diese Suche.
+        assistTask = Task {
             await model.refreshAssistantAvailability()
+            guard !Task.isCancelled else { return }
             if model.assistantAvailable {
                 assistRequest = request
             } else {
@@ -412,8 +454,13 @@ struct RuleEditorView: View {
     }
 
     /// `index == nil` → neue Umschreibung; sonst diese ersetzen/verfeinern.
+    ///
+    /// Übernahme per Regel-ID und gemerktem Wert der Umschreibung statt festem Index (§27 A13): wurde
+    /// die Liste inzwischen geändert, trifft sie dieselbe Umschreibung oder legt eine neue an.
     private func assistRewrite(at index: Int?) {
         let existing = index.flatMap { rule.rewrites.indices.contains($0) ? rule.rewrites[$0] : nil }
+        let ruleID = rule.id
+        let model = model
         openAssistant(RegexAssistantRequest(
             mode: .rewrite,
             context: index.map { "Umschreibung \($0 + 1) ersetzen oder verfeinern" } ?? "Neue Umschreibung",
@@ -422,18 +469,24 @@ struct RuleEditorView: View {
             caseSensitive: existing?.caseSensitive ?? false,
             apply: { pattern, template, examples in
                 let template = template ?? ""
-                if let index, rule.rewrites.indices.contains(index) {
-                    rule.rewrites[index].pattern = pattern
-                    rule.rewrites[index].template = template
-                } else {
-                    rule.rewrites.append(Rewrite(pattern: pattern, template: template))
+                model.updateRule(ruleID) { rule in
+                    if let existing, let target = StableIDs.locate(existing, preferred: index, in: rule.rewrites) {
+                        rule.rewrites[target].pattern = pattern
+                        rule.rewrites[target].template = template
+                    } else {
+                        rule.rewrites.append(Rewrite(pattern: pattern, template: template))
+                    }
+                    Self.adoptTestURL(examples, into: &rule)
                 }
-                adoptTestURL(examples)
             }
         ))
     }
 
     private func assistCondition(at index: Int, target: RegexTarget, match: TextMatch) {
+        guard rule.conditions.indices.contains(index) else { return }
+        let original = rule.conditions[index]
+        let ruleID = rule.id
+        let model = model
         openAssistant(RegexAssistantRequest(
             mode: .condition(target),
             context: "Bedingung \(index + 1): \(target == .url ? "URL" : target == .host ? "Host" : "Pfad") passt auf Regex",
@@ -441,21 +494,24 @@ struct RuleEditorView: View {
             current: match.value.isEmpty ? nil : RegexSuggestion(pattern: match.value, template: nil),
             caseSensitive: match.caseSensitive,
             apply: { pattern, _, examples in
-                guard rule.conditions.indices.contains(index) else { return }
-                switch rule.conditions[index] {
-                case .url(var m): m.value = pattern; rule.conditions[index] = .url(m)
-                case .host(var m): m.value = pattern; rule.conditions[index] = .host(m)
-                case .path(var m): m.value = pattern; rule.conditions[index] = .path(m)
-                default: break
+                model.updateRule(ruleID) { rule in
+                    guard let target = StableIDs.locate(original, preferred: index, in: rule.conditions) else { return }
+                    switch rule.conditions[target] {
+                    case .url(var m): m.value = pattern; rule.conditions[target] = .url(m)
+                    case .host(var m): m.value = pattern; rule.conditions[target] = .host(m)
+                    case .path(var m): m.value = pattern; rule.conditions[target] = .path(m)
+                    default: return
+                    }
+                    Self.adoptTestURL(examples, into: &rule)
                 }
-                adoptTestURL(examples)
             }
         ))
     }
 
     /// Noch keine Test-URL? Dann die erste Beispiel-URL aus dem Sheet übernehmen.
-    private func adoptTestURL(_ examples: [String]) {
-        guard trimmedTestURL.isEmpty, let first = examples.first else { return }
+    private static func adoptTestURL(_ examples: [String], into rule: inout Rule) {
+        let current = (rule.testURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard current.isEmpty, let first = examples.first else { return }
         rule.testURL = first
     }
 
@@ -544,8 +600,9 @@ private struct PendingApprovalCard: View {
                 Button(previous == nil ? "Verwerfen (Regel löschen)" : "Verwerfen", role: .destructive, action: onDiscard)
                     .help(previous == nil ? "Neue Regel löschen" : "Vorherigen Stand wiederherstellen")
                 Button("Freigeben", action: onApprove)
-                    .buttonStyle(.borderedProminent)
-                    .tint(DS.orange)
+                    // Eigene Fläche statt `.borderedProminent`: weiße Schrift auf hellem Orange hätte im
+                    // Dunkelmodus zu wenig Kontrast (§27 A18).
+                    .buttonStyle(OrangeProminentButtonStyle())
                     .help("Änderung übernehmen – gilt danach für echte Links")
             }
         }
@@ -748,6 +805,8 @@ private struct ConditionRow: View {
     }
 
     var body: some View {
+        // Einmal je Render statt in Feld und Fehlerzeile getrennt (§27 A14).
+        let regexError = regexError
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Picker("Feld", selection: kind) {
@@ -768,7 +827,7 @@ private struct ConditionRow: View {
                 if let testResult { ConditionStatus(passed: testResult) }
             }
             HStack(spacing: 6) {
-                valueEditor
+                valueEditor(isError: regexError != nil)
                 tools
             }
             if let error = regexError {
@@ -812,10 +871,10 @@ private struct ConditionRow: View {
         }
     }
 
-    @ViewBuilder private var valueEditor: some View {
+    @ViewBuilder private func valueEditor(isError: Bool) -> some View {
         switch condition {
         case .url(let m), .host(let m), .path(let m):
-            DSTextField("Wert", text: textBinding(m, \.value), mono: true, isError: regexError != nil)
+            DSTextField("Wert", text: textBinding(m, \.value), mono: true, isError: isError)
         case .sourceApp(let id, let negated):
             SourceAppField(bundleIdentifier: Binding(
                 get: { id },
@@ -899,9 +958,10 @@ private struct RewriteRow: View {
     let onDelete: () -> Void
     let onAssist: () -> Void
 
-    private var error: String? { Rewriter.validationError(for: rewrite) }
-
     var body: some View {
+        // Fehler und Regex einmal je Render (§27 A14); der Regex kommt aus dem Cache des Core.
+        let error = Rewriter.validationError(for: rewrite)
+        let regex = error == nil ? Self.regex(for: rewrite) : nil
         VStack(alignment: .leading, spacing: 0) {
             if let number {
                 HStack(spacing: 6) {
@@ -931,7 +991,7 @@ private struct RewriteRow: View {
                 Color.clear.frame(width: 24 + 22 + 22 + 16, height: 1)
             }
             .padding(.vertical, 5)
-            preview
+            preview(error: error, regex: regex)
         }
     }
 
@@ -939,7 +999,7 @@ private struct RewriteRow: View {
         Text(text).font(DS.small).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
     }
 
-    @ViewBuilder private var preview: some View {
+    @ViewBuilder private func preview(error: String?, regex: NSRegularExpression?) -> some View {
         Group {
             if let error {
                 Text("Ungültiger regulärer Ausdruck: \(error)")
@@ -947,13 +1007,14 @@ private struct RewriteRow: View {
                     .foregroundStyle(DS.red)
                     .textSelection(.enabled)
             } else if let step {
-                if !patternMatches(step.input) {
+                let match = regex?.firstMatch(in: step.input, range: NSRange(step.input.startIndex..., in: step.input))
+                if match == nil {
                     Text("Muster trifft nicht – URL bleibt unverändert")
                         .font(DS.small)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        groupLegend(step.input)
+                        groupLegend(captureGroups(match, in: step.input))
                         resultBlock(step)
                         if Rewriter.validURL(step.output) == nil {
                             Text("Ergebnis ist keine gültige URL – es würde die Original-URL verwendet.")
@@ -969,8 +1030,7 @@ private struct RewriteRow: View {
     }
 
     /// „Gruppen: $1 = … $2 = …“ für den ersten Treffer des Musters.
-    @ViewBuilder private func groupLegend(_ input: String) -> some View {
-        let groups = captureGroups(in: input)
+    @ViewBuilder private func groupLegend(_ groups: [String]) -> some View {
         if !groups.isEmpty {
             FlowLayout(spacing: 6, lineSpacing: 4) {
                 Text("Gruppen:").font(DS.small).foregroundStyle(.secondary)
@@ -991,18 +1051,12 @@ private struct RewriteRow: View {
         }
     }
 
-    private var regex: NSRegularExpression? {
+    private static func regex(for rewrite: Rewrite) -> NSRegularExpression? {
         try? NSRegularExpression(pattern: rewrite.pattern, options: rewrite.caseSensitive ? [] : [.caseInsensitive])
     }
 
-    private func patternMatches(_ input: String) -> Bool {
-        regex?.firstMatch(in: input, range: NSRange(input.startIndex..., in: input)) != nil
-    }
-
-    private func captureGroups(in input: String) -> [String] {
-        guard let regex, let match = regex.firstMatch(in: input, range: NSRange(input.startIndex..., in: input)),
-              match.numberOfRanges > 1
-        else { return [] }
+    private func captureGroups(_ match: NSTextCheckingResult?, in input: String) -> [String] {
+        guard let match, match.numberOfRanges > 1 else { return [] }
         return (1..<match.numberOfRanges).map { i in
             Range(match.range(at: i), in: input).map { String(input[$0]) } ?? ""
         }
@@ -1033,5 +1087,23 @@ private struct RewriteRow: View {
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(DS.neutralFill))
+    }
+}
+
+// MARK: - Stabile Zeilen-IDs (§27 A20)
+
+/// Identitäten für Listen ohne eigene ID (Bedingungen, Umschreibungen), solange der Editor lebt.
+enum StableIDs {
+    /// Passt die Liste an die Anzahl an: fehlende hinten ergänzen, überzählige hinten streichen.
+    static func sync(_ ids: [UUID], count: Int) -> [UUID] {
+        if ids.count == count { return ids }
+        if ids.count > count { return Array(ids.prefix(count)) }
+        return ids + (ids.count..<count).map { _ in UUID() }
+    }
+
+    /// Index des gemerkten Elements: bevorzugt an `preferred`, sonst das erste gleiche; nil, wenn weg.
+    static func locate<Element: Equatable>(_ element: Element, preferred: Int?, in list: [Element]) -> Int? {
+        if let preferred, list.indices.contains(preferred), list[preferred] == element { return preferred }
+        return list.firstIndex(of: element)
     }
 }

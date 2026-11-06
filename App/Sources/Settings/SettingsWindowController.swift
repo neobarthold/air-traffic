@@ -11,6 +11,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let model: AppModel
     let tabs: SettingsTabViewController
+    private static let frameAutosaveName = "AirTrafficSettings"
+    /// Beim Start lag schon ein Fensterrahmen in den Einstellungen (§27 A16).
+    private let hasSavedFrame: Bool
+    private var didPlaceWindow = false
     /// Nach dem Schließen (z. B. wartendes Update installieren, §17).
     var onClose: (() -> Void)?
 
@@ -30,7 +34,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.contentViewController = tabs
         window.contentMinSize = Self.minSize
         window.setContentSize(Self.minSize)
-        if autosavesFrame { window.setFrameAutosaveName("AirTrafficSettings") }
+        // Nur ohne gespeicherten Rahmen zentrieren (§27 A16).
+        hasSavedFrame = autosavesFrame
+            && UserDefaults.standard.object(forKey: "NSWindow Frame \(Self.frameAutosaveName)") != nil
+        if autosavesFrame { window.setFrameAutosaveName(Self.frameAutosaveName) }
         super.init(window: window)
         window.delegate = self
         tabs.syncFromModel()
@@ -44,7 +51,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         NSApp.mainMenu = MainMenu.make(updates: model.updates)
         if let window, window.isVisible != true {
             ensureMinimumSize()
-            window.center()
+            // Gespeicherte Position (Autosave) respektieren; sonst nur beim ersten Zeigen zentrieren.
+            if !hasSavedFrame, !didPlaceWindow { window.center() }
+            didPlaceWindow = true
         }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)

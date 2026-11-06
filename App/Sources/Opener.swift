@@ -74,14 +74,21 @@ final class Opener {
             chooser.present(request.with(hint: LoopBrake.hint))
             return
         }
-        if !open(url, with: target, activates: true) {
+        if !open(url, with: target, activates: true, onFailure: { [chooser] hint in
+            chooser.present(request.with(hint: hint))
+        }) {
             chooser.present(request.with(hint: "„\(target.displayName)“ wurde nicht gefunden."))
         }
     }
 
     /// Öffnet die URL mit der App. `false`, wenn die App nicht auffindbar ist.
+    ///
+    /// Scheitert der Start erst später (Completion von `NSWorkspace.open`), ruft `onFailure` mit einem
+    /// Hinweis auf – der Link geht dann nicht verloren, sondern landet im Auswahlfenster (§5, §27 A2).
     @discardableResult
-    func open(_ url: URL, with app: AppRef, activates: Bool) -> Bool {
+    func open(
+        _ url: URL, with app: AppRef, activates: Bool, onFailure: (@MainActor (String) -> Void)? = nil
+    ) -> Bool {
         guard !AirTrafficURL.isAirTrafficURL(url) else {
             Log.opener.error("airtraffic-Link als Ziel verworfen (Schleifenschutz)")
             return false
@@ -93,11 +100,12 @@ final class Opener {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = activates
         Log.opener.info("Öffne \(url.absoluteString, privacy: .private) mit \(appURL.lastPathComponent, privacy: .public)")
+        let name = app.displayName
         NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { _, error in
-            if let error {
-                // Fehlermeldungen von LaunchServices können die URL enthalten (§26.7).
-                Log.opener.error("Öffnen fehlgeschlagen: \(error.localizedDescription, privacy: .private)")
-            }
+            guard let error else { return }
+            // Fehlermeldungen von LaunchServices können die URL enthalten (§26.7).
+            Log.opener.error("Öffnen fehlgeschlagen: \(error.localizedDescription, privacy: .private)")
+            Task { @MainActor in onFailure?("„\(name)“ konnte nicht gestartet werden.") }
         }
         return true
     }

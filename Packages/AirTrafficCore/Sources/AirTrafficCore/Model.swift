@@ -362,16 +362,18 @@ public struct Rule: Codable, Sendable, Equatable, Identifiable {
         pendingChange = try c.decodeIfPresent(PendingChange.self, forKey: .pendingChange)
     }
 
-    /// Stand, den die Engine auswertet (§26.1): ohne wartende Änderung die Regel selbst; neu angelegt und
-    /// wartend → `nil` (übersprungen); geändert und wartend → der zuletzt freigegebene Stand, mit dem
-    /// aktuellen An/Aus (bleibt sofort wirksam).
+    /// Stand, den die Engine auswertet (§26.1, §27 K4): ohne wartende Änderung die Regel selbst; neu
+    /// angelegt und wartend → `nil` (übersprungen); geändert und wartend → die aktuelle Regel mit
+    /// Umschreibungen und Aktion aus dem zuletzt freigegebenen Stand. Name, Bedingungen, Test-URL und
+    /// An/Aus wirken sofort.
     public var effective: Rule? {
         guard let pendingChange else { return self }
-        guard var previous = pendingChange.previous else { return nil }
-        previous.id = id
-        previous.enabled = enabled
-        previous.pendingChange = nil
-        return previous
+        guard let previous = pendingChange.previous else { return nil }
+        var rule = self
+        rule.rewrites = previous.rewrites
+        rule.action = previous.action
+        rule.pendingChange = nil
+        return rule
     }
 
     /// Wartet auf Freigabe in der App.
@@ -428,8 +430,15 @@ public struct PendingChange: Codable, Sendable, Equatable {
         try c.encodeIfPresent(previous, forKey: .previous)
     }
 
+    /// ISO 8601 mit auf Millisekunden gerundetem Bruchteil (§27 K14): Lesen und erneutes Schreiben
+    /// ergeben dieselben Bytes (der Formatierer schneidet sonst ab, 0,234 → 0,233).
     static func formatDate(_ date: Date) -> String {
-        Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
+        let millis = (date.timeIntervalSince1970 * 1000).rounded()
+        let seconds = (millis / 1000).rounded(.down)
+        let fraction = Int(millis - seconds * 1000)
+        let whole = Date.ISO8601FormatStyle().format(Date(timeIntervalSince1970: seconds))
+        guard whole.hasSuffix("Z") else { return Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date) }
+        return String(whole.dropLast()) + "." + String(format: "%03d", fraction) + "Z"
     }
 
     static func parseDate(_ text: String) -> Date? {

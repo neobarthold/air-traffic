@@ -38,25 +38,62 @@ public final class MatchBudget {
 /// Abbruch eines Regex-Abgleichs nach Ablauf des Budgets.
 struct MatchTimeout: Error {}
 
-/// Kompilierte reguläre Ausdrücke, gecacht nach Muster und Optionen.
-enum RegexCache {
+/// Kompilierte reguläre Ausdrücke, gecacht nach Muster und Optionen (§27 K9: LRU statt Komplett-Leeren).
+final class RegexCache: Sendable {
     private struct Key: Hashable {
         var pattern: String
         var options: UInt
     }
 
-    private static let limit = 256
-    private static let storage = Mutex<[Key: NSRegularExpression]>([:])
+    private struct Entry {
+        var regex: NSRegularExpression
+        var lastUse: UInt64
+    }
+
+    private struct State {
+        var entries: [Key: Entry] = [:]
+        var tick: UInt64 = 0
+    }
+
+    static let defaultLimit = 512
+    /// Gemeinsamer Cache für Engine, Umschreibungen und Editor.
+    static let shared = RegexCache(limit: defaultLimit)
+
+    let limit: Int
+    private let state = Mutex(State())
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    var count: Int { state.withLock { $0.entries.count } }
 
     static func regex(_ pattern: String, options: NSRegularExpression.Options) throws -> NSRegularExpression {
+        try shared.regex(pattern, options: options)
+    }
+
+    func regex(_ pattern: String, options: NSRegularExpression.Options) throws -> NSRegularExpression {
         let key = Key(pattern: pattern, options: options.rawValue)
-        if let cached = storage.withLock({ $0[key] }) { return cached }
-        let regex = try NSRegularExpression(pattern: pattern, options: options)
-        storage.withLock { cache in
-            if cache.count >= limit { cache.removeAll(keepingCapacity: true) }
-            cache[key] = regex
+        let cached: NSRegularExpression? = state.withLock { state in
+            guard var entry = state.entries[key] else { return nil }
+            state.tick += 1
+            entry.lastUse = state.tick
+            state.entries[key] = entry
+            return entry.regex
         }
-        return regex
+        if let cached { return cached }
+        let regex = try NSRegularExpression(pattern: pattern, options: options)
+        return state.withLock { state in
+            // Ein anderer Thread kann denselben Ausdruck inzwischen eingetragen haben.
+            if let existing = state.entries[key] { return existing.regex }
+            if state.entries.count >= limit,
+               let oldest = state.entries.min(by: { $0.value.lastUse < $1.value.lastUse })?.key {
+                state.entries.removeValue(forKey: oldest)
+            }
+            state.tick += 1
+            state.entries[key] = Entry(regex: regex, lastUse: state.tick)
+            return regex
+        }
     }
 }
 
@@ -124,7 +161,9 @@ extension NSRegularExpression {
 ///
 /// Linearer Glob-Abgleich ohne Backtracking-Explosion: Bei einem Fehlschlag springt er nur zum
 /// letzten `*` zurück (O(n·m) im schlechtesten Fall). Verglichen wird je Unicode-Skalar, wie `.`
-/// im bisherigen regulären Ausdruck; ohne Groß/Klein über die Kleinschreibung je Skalar.
+/// im bisherigen regulären Ausdruck. Ohne Groß/Klein werden Muster-Literale und Text voll gefaltet
+/// (`folding(.caseInsensitive)`, §27 K7): `ß` = `SS`, `ς` = `Σ`, `ﬀ` = `FF` wie im regulären Ausdruck.
+/// `?` steht dabei für einen Skalar des gefalteten Texts.
 public struct WildcardPattern: Sendable {
     enum Token: Sendable, Equatable {
         case literal(Unicode.Scalar)
@@ -137,35 +176,42 @@ public struct WildcardPattern: Sendable {
 
     public init(_ pattern: String, caseSensitive: Bool) {
         var tokens: [Token] = []
+        var literal = String.UnicodeScalarView()
+        func flushLiteral() {
+            guard !literal.isEmpty else { return }
+            let text = String(literal)
+            let folded = caseSensitive ? text : Self.fold(text)
+            tokens += folded.unicodeScalars.map(Token.literal)
+            literal = String.UnicodeScalarView()
+        }
         var escaping = false
         for scalar in pattern.unicodeScalars {
             if escaping {
-                tokens.append(.literal(scalar))
+                literal.append(scalar)
                 escaping = false
                 continue
             }
             switch scalar {
             case "\\": escaping = true
             case "*":
+                flushLiteral()
                 // Mehrere `*` hintereinander sind gleichbedeutend mit einem.
                 if tokens.last != .star { tokens.append(.star) }
-            case "?": tokens.append(.any)
-            default: tokens.append(.literal(scalar))
+            case "?":
+                flushLiteral()
+                tokens.append(.any)
+            default: literal.append(scalar)
             }
         }
-        if escaping { tokens.append(.literal("\\")) }
+        if escaping { literal.append("\\") }
+        flushLiteral()
         self.tokens = tokens
         self.caseSensitive = caseSensitive
     }
 
     public func matches(_ subject: String) -> Bool {
-        let text = Array(subject.unicodeScalars)
-        let folded: [Unicode.Scalar]? = caseSensitive ? nil : text.map(Self.fold)
-        let pattern = caseSensitive ? tokens : tokens.map { token in
-            if case .literal(let scalar) = token { return .literal(Self.fold(scalar)) }
-            return token
-        }
-        let subject = folded ?? text
+        let subject = Array((caseSensitive ? subject : Self.fold(subject)).unicodeScalars)
+        let pattern = tokens
 
         var t = 0, p = 0
         var starP = -1, starT = 0
@@ -197,13 +243,59 @@ public struct WildcardPattern: Sendable {
         return p == pattern.count
     }
 
-    /// Kleinschreibung je Skalar; Zeichen mit mehrteiliger Kleinschreibung bleiben, wie sie sind.
-    static func fold(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
-        if scalar.isASCII {
-            let value = scalar.value
-            return (65...90).contains(value) ? Unicode.Scalar(value + 32)! : scalar
+    /// Volle Groß/Klein-Faltung; reines ASCII ohne Umweg über Foundation.
+    static func fold(_ text: String) -> String {
+        if text.utf8.allSatisfy({ $0 < 0x80 }) { return text.lowercased() }
+        return text.folding(options: .caseInsensitive, locale: nil)
+    }
+}
+
+// MARK: - Hostnamen (IDN, §27 A4)
+
+/// Unicode- und Punycode-Form eines Hostnamens (`bücher.de` ↔ `xn--bcher-kva.de`).
+public enum HostName {
+    /// Unicode-Form (zum Anzeigen); unverändert, wenn nicht umwandelbar.
+    public static func unicode(_ host: String) -> String {
+        guard host.lowercased().contains("xn--"),
+              let decoded = URLComponents(string: "https://" + host)?.host, !decoded.isEmpty
+        else { return host }
+        return decoded
+    }
+
+    /// Unicode-Host einer URL (`URL.host` liefert bei IDN die Punycode-Form).
+    public static func unicode(_ url: URL) -> String? {
+        guard let host = url.host(percentEncoded: false) else { return nil }
+        return unicode(host)
+    }
+
+    /// ASCII-Form (Punycode); unverändert bei reinem ASCII oder wenn nicht umwandelbar.
+    public static func ascii(_ host: String) -> String {
+        guard !host.utf8.allSatisfy({ $0 < 0x80 }),
+              let encoded = URL(string: "https://" + host)?.host(percentEncoded: false), !encoded.isEmpty
+        else { return host }
+        return encoded
+    }
+
+    /// Anzeigeform gegen Homograph-Spoofing: Unicode nur, wenn alle Nicht-ASCII-Zeichen lateinische
+    /// Buchstaben sind (z. B. `bücher.de`); gemischte oder andere Schriften (`аpple.com` mit kyrillischem а)
+    /// bleiben Punycode (`xn--pple-43d.com`).
+    public static func display(_ host: String) -> String {
+        let unicode = unicode(ascii(host))
+        let latinOnly = unicode.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 0..<0x80: true
+            case 0xD7, 0xF7: false  // × ÷
+            case 0xC0...0x24F, 0x1E00...0x1EFF: true  // Latin-1, Latin Extended-A/B, Additional
+            default: false
+            }
         }
-        let lower = scalar.properties.lowercaseMapping.unicodeScalars
-        return lower.count == 1 ? lower.first! : scalar
+        return latinOnly ? unicode : ascii(host)
+    }
+
+    /// Beide Formen ohne Duplikat, ASCII zuerst.
+    static func forms(_ host: String) -> [String] {
+        let ascii = ascii(host)
+        let unicode = unicode(ascii)
+        return unicode == ascii ? [ascii] : [ascii, unicode]
     }
 }

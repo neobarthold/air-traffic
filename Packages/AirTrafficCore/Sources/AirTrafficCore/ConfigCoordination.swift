@@ -7,10 +7,23 @@ import Foundation
 public struct ConfigSnapshot: Sendable, Equatable {
     public var config: Config
     public var fingerprint: String
+    /// In der Datei fehlt bei mindestens einer Regel `id`; die beim Laden vergebenen IDs sollten
+    /// zurückgeschrieben werden, damit sie stabil bleiben (§27 K13).
+    public var hasRulesWithoutID: Bool
 
-    public init(config: Config, fingerprint: String) {
+    public init(config: Config, fingerprint: String, hasRulesWithoutID: Bool = false) {
         self.config = config
         self.fingerprint = fingerprint
+        self.hasRulesWithoutID = hasRulesWithoutID
+    }
+
+    /// Dekodiert Datei-Bytes samt Fingerabdruck.
+    public init(data: Data) throws {
+        self.init(
+            config: try ConfigStore.decode(data),
+            fingerprint: ConfigStore.fingerprint(data),
+            hasRulesWithoutID: ConfigStore.hasRulesWithoutID(data)
+        )
     }
 }
 
@@ -56,8 +69,19 @@ extension ConfigStore {
     /// Lädt koordiniert samt Fingerabdruck; `nil`, wenn die Datei nicht existiert.
     public func loadSnapshot() throws -> ConfigSnapshot? {
         guard let data = try coordinatedData() else { return nil }
-        return ConfigSnapshot(config: try ConfigStore.decode(data), fingerprint: ConfigStore.fingerprint(data))
+        return try ConfigSnapshot(data: data)
     }
+
+    /// Mindestens eine Regel in `rules` hat kein `id`-Feld (§27 K13).
+    public static func hasRulesWithoutID(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rules = object["rules"] as? [Any]
+        else { return false }
+        return rules.contains { ($0 as? [String: Any])?["id"] == nil }
+    }
+
+    /// Läuft gerade die Änderungsfunktion von `modify` (unter der Dateisperre)? Für Tests (§27 K16).
+    @TaskLocal static var isInsideModify = false
 
     /// Lesen-Ändern-Schreiben unter `NSFileCoordinator`, atomar, mit Sicherungskopie (§24.4).
     ///
@@ -76,8 +100,10 @@ extension ConfigStore {
                 let data = try Data(contentsOf: url)
                 let original = try ConfigStore.decode(data)
                 var config = original
-                let value = try change(&config)
-                guard !dryRun, config != original else {
+                let value = try ConfigStore.$isInsideModify.withValue(true) { try change(&config) }
+                // Beim Laden vergebene IDs zurückschreiben, auch wenn sich sonst nichts ändert (§27 K13).
+                let assignsIDs = ConfigStore.hasRulesWithoutID(data)
+                guard !dryRun, config != original || assignsIDs else {
                     return ConfigModification(value: value, config: config, written: false, backupURL: nil)
                 }
                 let backup = try writeBackup(data, now: now)
@@ -119,11 +145,7 @@ extension ConfigStore {
                 case .reloadInstead:
                     guard let current else { return .saved(fingerprint: "") }
                     do {
-                        let snapshot = ConfigSnapshot(
-                            config: try ConfigStore.decode(current),
-                            fingerprint: ConfigStore.fingerprint(current)
-                        )
-                        return .conflict(current: snapshot)
+                        return .conflict(current: try ConfigSnapshot(data: current))
                     } catch {
                         return .conflictUnreadable(message: error.localizedDescription)
                     }
@@ -152,6 +174,12 @@ extension ConfigStore {
         try data.write(to: target, options: .atomic)
         try pruneBackups(now: now)
         return target
+    }
+
+    /// Sicherung eines Stands aus der App, z. B. vor dem Löschen einer Regel (§27 A15).
+    @discardableResult
+    public func writeBackup(of config: Config, now: Date = Date()) throws -> URL {
+        try writeBackup(ConfigStore.encode(config), now: now)
     }
 
     /// Sicherungen, älteste zuerst.

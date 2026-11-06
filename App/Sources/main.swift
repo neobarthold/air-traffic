@@ -1,5 +1,8 @@
 import AppKit
 
+// Schreiben in eine Pipe, deren Leser weg ist (KI-CLI, Debug-Ausgabe), darf die App nicht beenden (§27 K1).
+signal(SIGPIPE, SIG_IGN)
+
 // Debug-Schalter (`--decide`, `--suggest-regex`, `--snapshot`) gibt es nur im Debug-Build (§26.5).
 // Der Release-Build ignoriert sie und startet normal.
 #if DEBUG

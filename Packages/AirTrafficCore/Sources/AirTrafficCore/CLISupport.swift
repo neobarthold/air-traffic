@@ -163,13 +163,20 @@ public struct SystemProcessRunner: ProcessRunner {
 }
 
 /// Ein laufender Prozess. Zustand hinter einem Lock, damit Abbruch und Timeout aus anderen Threads greifen.
+///
+/// §27 K15: Der Start wird unter dem Lock markiert und nach `run()` erneut auf Abbruch geprüft (ein
+/// Abbruch zwischen Prüfung und Start beendet den Prozess sofort). Zeitlimit und Abbruch zählen nur,
+/// solange der Prozess läuft – endet er vorher, gilt sein Ergebnis, auch wenn ein Enkel die Ausgabe
+/// noch offen hält. §27 K1: Schreiben auf stdin eines schon beendeten Kinds ergibt EPIPE statt SIGPIPE.
 private final class ProcessJob: @unchecked Sendable {
-    private enum Outcome { case running, cancelled, timedOut }
+    private enum Phase { case notStarted, starting, running, finished }
+    private enum StopReason { case cancelled, timedOut }
 
     private let invocation: ProcessInvocation
     private let process = Process()
     private let lock = NSLock()
-    private var outcome = Outcome.running
+    private var phase = Phase.notStarted
+    private var stopReason: StopReason?
     private var stdoutData = Data()
     private var stderrData = Data()
 
@@ -197,23 +204,32 @@ private final class ProcessJob: @unchecked Sendable {
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        // Kind beendet, bevor es stdin gelesen hat → write() liefert EPIPE, kein SIGPIPE für uns (§27 K1).
+        _ = fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
 
         lock.lock()
-        let cancelledEarly = outcome == .cancelled
+        if stopReason == .cancelled { lock.unlock(); throw CancellationError() }
+        phase = .starting
         lock.unlock()
-        if cancelledEarly { throw CancellationError() }
 
         do {
             try process.run()
         } catch {
+            lock.withLock { phase = .finished }
             throw ProcessRunnerError.launchFailed(error.localizedDescription)
         }
+
+        lock.lock()
+        phase = .running
+        let cancelledWhileStarting = stopReason == .cancelled
+        lock.unlock()
+        if cancelledWhileStarting { terminate() }
 
         let group = DispatchGroup()
         read(stdoutPipe, group: group) { job, data in job.stdoutData = data }
         read(stderrPipe, group: group) { job, data in job.stderrData = data }
 
-        // stdin getrennt schreiben, damit ein voller Puffer nicht blockiert.
+        // stdin getrennt schreiben, damit ein voller Puffer nicht blockiert. EPIPE ist ein normaler Fehler.
         let input = invocation.stdin ?? Data()
         DispatchQueue.global(qos: .userInitiated).async {
             let handle = stdinPipe.fileHandleForWriting
@@ -228,14 +244,15 @@ private final class ProcessJob: @unchecked Sendable {
         }
 
         process.waitUntilExit()
+        lock.withLock { phase = .finished }
         group.wait()
 
         lock.lock()
         defer { lock.unlock() }
-        switch outcome {
+        switch stopReason {
         case .cancelled: throw CancellationError()
         case .timedOut: throw ProcessRunnerError.timedOut
-        case .running: return ProcessResult(exitCode: process.terminationStatus, stdout: stdoutData, stderr: stderrData)
+        case nil: return ProcessResult(exitCode: process.terminationStatus, stdout: stdoutData, stderr: stderrData)
         }
     }
 
@@ -252,13 +269,20 @@ private final class ProcessJob: @unchecked Sendable {
 
     func cancel() { stop(because: .cancelled) }
 
-    private func stop(because reason: Outcome) {
+    private func stop(because reason: StopReason) {
         lock.lock()
-        guard outcome == .running else { lock.unlock(); return }
-        outcome = reason
-        let running = process.isRunning
+        // Schon beendet: Ergebnis gilt. Noch nicht gestartet/startend: `runBlocking` prüft danach selbst.
+        guard stopReason == nil, phase != .finished else { lock.unlock(); return }
+        if reason == .timedOut, phase != .running { lock.unlock(); return }
+        stopReason = reason
+        let running = phase == .running
         lock.unlock()
-        guard running else { return }
+        if running { terminate() }
+    }
+
+    /// SIGTERM, nach 2 s SIGKILL.
+    private func terminate() {
+        guard process.isRunning else { return }
         process.terminate()
         let pid = process.processIdentifier
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [process] in
@@ -278,7 +302,7 @@ public actor LoginShell {
 
     private let runner: any ProcessRunner
     private let shellPath: String
-    private var cachedPath: String??
+    private var cachedPath: String?
 
     public init(
         runner: any ProcessRunner = SystemProcessRunner(),
@@ -308,12 +332,18 @@ public actor LoginShell {
         return value.isEmpty ? nil : value
     }
 
-    /// `PATH` der Login-Shell (zwischengespeichert, auch wenn nicht ermittelbar).
+    /// `PATH` der Login-Shell; nur ein gefundener Wert wird zwischengespeichert (§27 A17), ein
+    /// Fehlschlag (Zeitlimit, kaputtes Profil) wird beim nächsten Mal erneut versucht.
     public func path() async -> String? {
         if let cachedPath { return cachedPath }
         let value = await evaluate("\"$PATH\"")
-        cachedPath = .some(value)
+        if let value { cachedPath = value }
         return value
+    }
+
+    /// Vergisst den zwischengespeicherten `PATH` (App wieder aktiv, „Erneut suchen“).
+    public func invalidateCache() {
+        cachedPath = nil
     }
 
     /// `command -v <name>` in der Login-Shell.

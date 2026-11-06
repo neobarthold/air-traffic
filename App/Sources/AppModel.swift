@@ -1,6 +1,7 @@
 import AirTrafficCore
 import AppKit
 import Observation
+import SwiftUI
 
 /// Tabs des Einstellungsfensters in Toolbar-Reihenfolge (§23.5).
 enum SettingsTab: Hashable, CaseIterable {
@@ -49,8 +50,11 @@ final class AppModel {
 
     /// Hinweis „Regeln wurden von außen geändert und neu geladen.“ (orange Zeile, 6 s oder Klick).
     private(set) var showsExternalChangeNotice = false
-    /// Zählt Neuladen von außen; Ansichten mit eigenem Zustand (Regel-Editor) bauen sich damit neu auf.
+    /// Zählt Neuladen von außen.
     private(set) var externalReloadCount = 0
+    /// Zählt nur Neuladen, bei denen sich die ausgewählte Regel geändert hat (bzw. Import „Ersetzen“);
+    /// der Regel-Editor baut seinen eigenen Zustand nur dann neu auf (§27 A12).
+    private(set) var editorResetCount = 0
     /// Fingerabdruck der zuletzt geladenen/gespeicherten Datei; Grundlage der Konfliktentscheidung.
     @ObservationIgnored private var knownFingerprint: String?
     @ObservationIgnored private var isApplyingExternalChange = false
@@ -143,6 +147,8 @@ final class AppModel {
                 config = loaded.config
                 knownFingerprint = loaded.fingerprint
                 Log.config.info("Konfiguration geladen: \(store.fileURL.path, privacy: .public)")
+                // Regeln ohne `id`: vergebene IDs sofort zurückschreiben, damit sie stabil bleiben (§27 K13).
+                if loaded.hasRulesWithoutID { saveNow() }
             } else {
                 config = AppModel.firstRunConfig()
                 Log.config.info("Erster Start – Browser erkannt: \(self.config.browsers.count)")
@@ -179,8 +185,129 @@ final class AppModel {
     }
 
     func rule(withID id: UUID?) -> Rule? {
+        guard let index = ruleIndex(id) else { return nil }
+        return config.rules[index]
+    }
+
+    // MARK: Regeln per ID (§27 A1, A6/A7)
+
+    @ObservationIgnored private var indexCache: (rules: [Rule], index: [UUID: Int])?
+
+    /// Index einer Regel über ein zwischengespeichertes `id → index`-Dictionary.
+    func ruleIndex(_ id: UUID?) -> Int? {
         guard let id else { return nil }
-        return config.rules.first { $0.id == id }
+        let rules = config.rules
+        if let cache = indexCache, cache.rules == rules { return cache.index[id] }
+        let index = Dictionary(rules.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        indexCache = (rules, index)
+        return index[id]
+    }
+
+    /// Ändert die Regel mit dieser ID (nicht über einen Index, der inzwischen woanders hinzeigt).
+    func updateRule(_ id: UUID, _ change: (inout Rule) -> Void) {
+        guard let index = ruleIndex(id) else { return }
+        var rule = config.rules[index]
+        change(&rule)
+        guard rule != config.rules[index] else { return }
+        config.rules[index] = rule
+    }
+
+    /// Bindung an eine Regel per ID; ist sie weg, liefert sie `fallback` und schreibt nichts.
+    func ruleBinding(_ id: UUID, fallback: Rule) -> Binding<Rule> {
+        Binding(
+            get: { [weak self] in self?.rule(withID: id) ?? fallback },
+            set: { [weak self] new in self?.updateRule(id) { $0 = new } }
+        )
+    }
+
+    // MARK: Liste im Tab „Regeln“ (§27 A6/A7)
+
+    @ObservationIgnored private var ruleListCache: (key: RuleListKey, state: RuleListState)?
+
+    /// Sichtbare Zeilen samt URL-Prüfung; nur neu berechnet, wenn sich Konfiguration, Suchtext,
+    /// Prüf-URL, Simulation oder Ansicht ändern.
+    var ruleList: RuleListState {
+        let key = RuleListKey(
+            config: config,
+            query: ruleQuery,
+            checkURL: ruleCheckURL,
+            context: ruleCheckContext,
+            showsAll: ruleCheckShowsAll
+        )
+        if let cache = ruleListCache, cache.key == key { return cache.state }
+        let state = RuleListState.make(key)
+        ruleListCache = (key, state)
+        return state
+    }
+
+    /// Nächste Auswahl nach dem Entfernen: aus den sichtbaren Regeln (§27 A10).
+    private func selectionAfterRemoving(_ id: UUID) -> UUID? {
+        RuleListEditing.selection(afterRemoving: id, visible: ruleList.rows.map(\.id))
+    }
+
+    // MARK: Löschen, Duplizieren, Umsortieren mit Rückgängig (§27 A15)
+
+    /// Löscht die Regel; vorher Sicherung des Stands. Rückgängig über den UndoManager des Fensters.
+    func deleteRule(_ id: UUID, undoManager: UndoManager?) {
+        guard let index = ruleIndex(id) else { return }
+        backupBeforeDelete()
+        let rule = config.rules[index]
+        let next = selectedRuleID == id ? selectionAfterRemoving(id) : selectedRuleID
+        config.rules.remove(at: index)
+        selectedRuleID = next
+        registerUndo(undoManager, name: "Regel löschen") { model, undo in
+            RuleListEditing.reinsert(rule, at: index, into: &model.config.rules)
+            model.selectedRuleID = rule.id
+            model.registerUndo(undo, name: "Regel löschen") { model, redo in model.deleteRule(rule.id, undoManager: redo) }
+        }
+    }
+
+    /// Kopie hinter der Regel bzw. an `index`; wird ausgewählt.
+    func insertRule(_ rule: Rule, at index: Int, undoManager: UndoManager?, actionName: String) {
+        RuleListEditing.reinsert(rule, at: index, into: &config.rules)
+        selectedRuleID = rule.id
+        registerUndo(undoManager, name: actionName) { model, undo in
+            let previous = model.selectedRuleID == rule.id ? model.selectionAfterRemoving(rule.id) : model.selectedRuleID
+            model.config.rules.removeAll { $0.id == rule.id }
+            model.selectedRuleID = previous
+            model.registerUndo(undo, name: actionName) { model, redo in
+                model.insertRule(rule, at: index, undoManager: redo, actionName: actionName)
+            }
+        }
+    }
+
+    func moveRules(fromOffsets from: IndexSet, toOffset to: Int, undoManager: UndoManager?) {
+        let before = config.rules.map(\.id)
+        config.rules.move(fromOffsets: from, toOffset: to)
+        registerReorderUndo(undoManager, restoring: before)
+    }
+
+    private func registerReorderUndo(_ undoManager: UndoManager?, restoring order: [UUID]) {
+        registerUndo(undoManager, name: "Regeln umsortieren") { model, undo in
+            let current = model.config.rules.map(\.id)
+            model.config.rules = RuleListEditing.reorder(model.config.rules, to: order)
+            model.registerReorderUndo(undo, restoring: current)
+        }
+    }
+
+    /// Undo-Schritt, der beim Ausführen den Gegenschritt (Wiederholen) selbst registriert.
+    private func registerUndo(
+        _ undoManager: UndoManager?, name: String, _ action: @escaping @MainActor (AppModel, UndoManager) -> Void
+    ) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { action(model, undoManager) }
+        }
+        undoManager.setActionName(name)
+    }
+
+    private func backupBeforeDelete() {
+        guard persists else { return }
+        do {
+            try store.writeBackup(of: config)
+        } catch {
+            Log.config.error("Sicherung vor dem Löschen fehlgeschlagen: \(String(describing: error), privacy: .private)")
+        }
     }
 
     // MARK: Speichern
@@ -252,12 +379,17 @@ final class AppModel {
         saveTask?.cancel()
         saveTask = nil
         knownFingerprint = snapshot.fingerprint
+        let selectedBefore = rule(withID: selectedRuleID)
         isApplyingExternalChange = true
         config = snapshot.config
         isApplyingExternalChange = false
-        if let id = selectedRuleID, !config.rules.contains(where: { $0.id == id }) { selectedRuleID = nil }
+        if let id = selectedRuleID, ruleIndex(id) == nil { selectedRuleID = nil }
         if problem?.hasPrefix("Von außen") == true { problem = nil }
         externalReloadCount += 1
+        // Editor nur neu aufbauen, wenn sich die ausgewählte Regel geändert hat (§27 A12).
+        if rule(withID: selectedRuleID) != selectedBefore { editorResetCount += 1 }
+        // Regeln ohne `id` (von Hand bearbeitet): vergebene IDs zurückschreiben (§27 K13).
+        if snapshot.hasRulesWithoutID { scheduleSave() }
         Log.config.info("Konfiguration von außen geändert und neu geladen, wartend: \(self.pendingRuleCount)")
         showExternalChangeNotice()
         onExternalChange?(config)
@@ -293,19 +425,32 @@ final class AppModel {
         Log.config.info("Regel freigegeben: \(self.config.rules[index].name, privacy: .public)")
     }
 
-    /// „Verwerfen“: neu angelegt → löschen, geändert → zuletzt freigegebenen Stand wiederherstellen.
-    func discardPendingChange(_ id: UUID) {
-        guard let index = config.rules.firstIndex(where: { $0.id == id }) else { return }
-        let name = config.rules[index].name
-        if let restored = RuleApproval.discard(config.rules[index]) {
+    /// „Verwerfen“: neu angelegt → löschen (mit Sicherung), geändert → zuletzt freigegebenen Stand
+    /// wiederherstellen. Rückgängig über den UndoManager des Fensters (§27 A15).
+    func discardPendingChange(_ id: UUID, undoManager: UndoManager? = nil) {
+        guard let index = ruleIndex(id) else { return }
+        let original = config.rules[index]
+        if let restored = RuleApproval.discard(original) {
             config.rules[index] = restored
         } else {
+            backupBeforeDelete()
+            // Nächste Auswahl aus den sichtbaren Regeln (§27 A10).
+            let next = selectedRuleID == id ? selectionAfterRemoving(id) : selectedRuleID
             config.rules.remove(at: index)
-            if selectedRuleID == id {
-                selectedRuleID = config.rules.isEmpty ? nil : config.rules[min(index, config.rules.count - 1)].id
+            selectedRuleID = next
+        }
+        registerUndo(undoManager, name: "Änderung verwerfen") { model, undo in
+            if let current = model.ruleIndex(id) {
+                model.config.rules[current] = original
+            } else {
+                RuleListEditing.reinsert(original, at: index, into: &model.config.rules)
+            }
+            model.selectedRuleID = id
+            model.registerUndo(undo, name: "Änderung verwerfen") { model, redo in
+                model.discardPendingChange(id, undoManager: redo)
             }
         }
-        Log.config.info("Änderung von außen verworfen: \(name, privacy: .public)")
+        Log.config.info("Änderung von außen verworfen: \(original.name, privacy: .public)")
     }
 
     // MARK: Darstellung (§23.1)
@@ -434,6 +579,11 @@ final class AppModel {
             }
         }
         config = next
+        // „Ersetzen“: Auswahl und Editor zurücksetzen wie beim Neuladen von außen (§27 A11).
+        if replace {
+            if let id = selectedRuleID, ruleIndex(id) == nil { selectedRuleID = nil }
+            editorResetCount += 1
+        }
     }
 }
 
@@ -441,4 +591,77 @@ final class AppModel {
 struct CLIStatus: Equatable {
     var url: URL?
     var version: String?
+}
+
+// MARK: - Zeilenmodelle der Regel-Liste (§27 A6/A7)
+
+/// Eingaben, von denen die Regel-Liste abhängt.
+struct RuleListKey: Equatable {
+    var config: Config
+    var query: String
+    var checkURL: URL?
+    var context: LinkContext
+    var showsAll: Bool
+}
+
+/// Eine sichtbare Zeile: Wert der Regel, Position und (im Prüfmodus) Status-Zeile.
+struct RuleRowModel: Identifiable, Equatable {
+    var rule: Rule
+    var position: Int
+    var checkLine: RuleCheckLine?
+    var id: UUID { rule.id }
+}
+
+/// Vorab berechnete Liste: URL-Prüfung bzw. Textfilter, Zeilen in Anzeigereihenfolge.
+struct RuleListState: Equatable {
+    var check: RuleCheckResult?
+    var rows: [RuleRowModel]
+    /// Position (1-basiert) je Regel, für „Regel n greift zuerst“.
+    var positions: [UUID: Int]
+
+    func contains(_ id: UUID) -> Bool { rows.contains { $0.id == id } }
+
+    static func make(_ key: RuleListKey) -> RuleListState {
+        let rules = key.config.rules
+        let positions = Dictionary(rules.enumerated().map { ($1.id, $0 + 1) }, uniquingKeysWith: { a, _ in a })
+        guard let url = key.checkURL else {
+            let rows = RuleSearch.filter(rules, query: key.query).map {
+                RuleRowModel(rule: $0, position: positions[$0.id] ?? 0, checkLine: nil)
+            }
+            return RuleListState(check: nil, rows: rows, positions: positions)
+        }
+        let check = RuleEngine.check(url: url, context: key.context, config: key.config)
+        let rows = zip(rules, check.entries)
+            .filter { key.showsAll || $0.1.matches }
+            .map { rule, entry in
+                RuleRowModel(rule: rule, position: entry.position, checkLine: checkLine(for: rule, entry: entry, in: check, positions: positions))
+            }
+        return RuleListState(check: check, rows: rows, positions: positions)
+    }
+
+    /// Status-Zeile einer Regel im Prüfmodus (§22.3).
+    static func checkLine(
+        for rule: Rule, entry: RuleCheckEntry, in check: RuleCheckResult, positions: [UUID: Int]
+    ) -> RuleCheckLine {
+        switch entry.status {
+        case .wins:
+            let rewrites = check.decision.finalURL != check.decision.originalURL
+            return RuleCheckLine(kind: .wins, text: rewrites ? "greift · schreibt um" : "greift")
+        case .shadowed(let winnerID):
+            let number = positions[winnerID]
+            return RuleCheckLine(kind: .shadowed, text: "trifft, aber Regel \(number.map(String.init) ?? "?") greift zuerst")
+        case .disabledMatch:
+            return RuleCheckLine(kind: .disabledMatch, text: "Aus – würde treffen")
+        case .pendingMatch:
+            return RuleCheckLine(kind: .pending, text: "trifft, wartet auf Freigabe")
+        case .noMatch:
+            guard let index = entry.firstFailedCondition, rule.conditions.indices.contains(index) else {
+                return RuleCheckLine(kind: .noMatch, text: "trifft nicht")
+            }
+            return RuleCheckLine(
+                kind: .noMatch,
+                text: "trifft nicht · Bedingung \(index + 1) (\(RuleText.fieldName(rule.conditions[index])))"
+            )
+        }
+    }
 }

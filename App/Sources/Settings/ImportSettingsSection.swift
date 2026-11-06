@@ -133,7 +133,7 @@ struct ImportPreviewView: View {
                 }
                 if !result.config.browsers.isEmpty {
                     Section("Browser") {
-                        ForEach(result.config.browsers, id: \.path) { app in
+                        ForEach(Array(result.config.browsers.enumerated()), id: \.offset) { _, app in
                             Text("\(app.displayName) – \(app.path)")
                         }
                     }

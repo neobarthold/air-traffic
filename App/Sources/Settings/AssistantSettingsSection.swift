@@ -84,7 +84,12 @@ struct AssistantSettingsSection: View {
             model.refreshAssistantKey()
             refreshCLI()
         }
-        .onDisappear { testTask?.cancel() }
+        .onDisappear {
+            // Tab-Wechsel bricht den Test ab; die Anzeige darf nicht bei „Teste Verbindung …“ hängen (§27 A5).
+            testTask?.cancel()
+            testTask = nil
+            testing = false
+        }
     }
 
     /// Immer sichtbar: wofür die KI verwendet wird und was gesendet wird (§16.3).
@@ -169,7 +174,7 @@ struct AssistantSettingsSection: View {
                     StatusPill(.warning, "Nicht gefunden", small: true)
                 }
                 Spacer(minLength: 0)
-                IconButton("arrow.clockwise", help: "Erneut suchen") { refreshCLI() }
+                IconButton("arrow.clockwise", help: "Erneut suchen") { refreshCLI(forgetShellPath: true) }
                     .disabled(searching)
             }
         }
@@ -235,10 +240,12 @@ struct AssistantSettingsSection: View {
         (path as NSString).abbreviatingWithTildeInPath
     }
 
-    private func refreshCLI() {
+    /// `forgetShellPath`: „Erneut suchen“ fragt die Login-Shell neu (§27 A17).
+    private func refreshCLI(forgetShellPath: Bool = false) {
         guard let cli = model.assistantProvider.cli else { return }
         searching = true
         Task {
+            if forgetShellPath { await LoginShell.shared.invalidateCache() }
             await model.refreshCLIStatus(cli)
             searching = false
         }
@@ -339,6 +346,8 @@ struct AssistantSettingsSection: View {
         testing = true
         status = nil
         testTask = Task {
+            // Auch bei Abbruch und Fehler zurücksetzen – außer ein neuerer Test läuft schon (§27 A5).
+            defer { if !Task.isCancelled { testing = false } }
             do {
                 let message = try await operation()
                 guard !Task.isCancelled else { return }
@@ -350,7 +359,6 @@ struct AssistantSettingsSection: View {
                 Log.assistant.error("Verbindungstest fehlgeschlagen: \(error.localizedDescription, privacy: .private)")
                 status = Status(message: error.localizedDescription, isError: true)
             }
-            testing = false
         }
     }
 }

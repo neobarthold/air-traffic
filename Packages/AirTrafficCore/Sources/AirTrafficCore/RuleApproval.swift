@@ -63,11 +63,13 @@ public enum RuleApproval {
         return result
     }
 
-    /// „Verwerfen“ in der App: neu angelegt → nil (löschen), geändert → zuletzt freigegebener Stand.
+    /// „Verwerfen“ in der App: neu angelegt → nil (löschen), geändert → zuletzt freigegebener Stand,
+    /// mit dem aktuellen An/Aus (§27 K5: das wirkt sofort und bleibt beim Verwerfen erhalten).
     public static func discard(_ rule: Rule) -> Rule? {
         guard let pending = rule.pendingChange else { return rule }
         guard var previous = pending.previous else { return nil }
         previous.id = rule.id
+        previous.enabled = rule.enabled
         previous.pendingChange = nil
         return previous
     }

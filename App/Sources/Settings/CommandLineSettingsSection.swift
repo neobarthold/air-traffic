@@ -59,7 +59,11 @@ struct CommandLineSettingsSection: View {
         }
         .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await refresh() }
+            // PATH kann sich inzwischen geändert haben (z. B. ~/.zprofile ergänzt, §27 A17).
+            Task {
+                await LoginShell.shared.invalidateCache()
+                await refresh()
+            }
         }
     }
 

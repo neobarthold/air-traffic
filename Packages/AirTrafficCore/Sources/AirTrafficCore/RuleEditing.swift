@@ -533,6 +533,38 @@ public enum RuleEditing {
     }
 }
 
+// MARK: - Liste in der App (§27 A10, A15)
+
+/// Reine Hilfen für Löschen, Rückgängig und Auswahl im Tab „Regeln“.
+public enum RuleListEditing {
+    /// Auswahl nach dem Entfernen von `id` aus der sichtbaren Liste: der nächste sichtbare Eintrag,
+    /// sonst der vorherige, sonst nil (§27 A10). Ist `id` nicht sichtbar, der erste sichtbare.
+    public static func selection(afterRemoving id: UUID, visible: [UUID]) -> UUID? {
+        guard let index = visible.firstIndex(of: id) else { return visible.first }
+        if index + 1 < visible.count { return visible[index + 1] }
+        return index > 0 ? visible[index - 1] : nil
+    }
+
+    /// Ordnet `rules` nach der ID-Reihenfolge `order`; Regeln, die dort fehlen (inzwischen angelegt),
+    /// folgen in ihrer bisherigen Reihenfolge. Für „Umsortieren rückgängig“ (§27 A15).
+    public static func reorder(_ rules: [Rule], to order: [UUID]) -> [Rule] {
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return rules.enumerated()
+            .sorted { a, b in
+                let ra = rank[a.element.id] ?? (order.count + a.offset)
+                let rb = rank[b.element.id] ?? (order.count + b.offset)
+                return ra < rb
+            }
+            .map(\.element)
+    }
+
+    /// Fügt `rule` wieder an `index` ein (begrenzt auf die Listenlänge), falls die ID fehlt.
+    public static func reinsert(_ rule: Rule, at index: Int, into rules: inout [Rule]) {
+        guard !rules.contains(where: { $0.id == rule.id }) else { return }
+        rules.insert(rule, at: min(max(index, 0), rules.count))
+    }
+}
+
 // MARK: - Kurzbeschreibungen (ohne App-Schicht)
 
 /// Deutsche Kurztexte für Regeln und Aktionen (Kommandozeile, MCP).

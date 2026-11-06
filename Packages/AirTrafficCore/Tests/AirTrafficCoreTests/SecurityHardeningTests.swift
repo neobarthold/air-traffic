@@ -394,9 +394,11 @@ struct MatchSafetyTests {
     }
 
     @Test func regexCacheReturnsSameInstance() throws {
-        let a = try RegexCache.regex("^cache-test$", options: [.caseInsensitive])
-        let b = try RegexCache.regex("^cache-test$", options: [.caseInsensitive])
-        let c = try RegexCache.regex("^cache-test$", options: [])
+        // Eigene Instanz statt des globalen Caches, den parallele Tests füllen (§27 K17).
+        let cache = RegexCache(limit: RegexCache.defaultLimit)
+        let a = try cache.regex("^cache-test$", options: [.caseInsensitive])
+        let b = try cache.regex("^cache-test$", options: [.caseInsensitive])
+        let c = try cache.regex("^cache-test$", options: [])
         #expect(a === b)
         #expect(a !== c)
     }

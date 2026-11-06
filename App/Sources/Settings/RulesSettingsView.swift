@@ -2,8 +2,69 @@ import AirTrafficCore
 import SwiftUI
 
 /// Tab „Regeln“ (SPEC §13, §15.3, §22): Seitenleiste mit Suche bzw. URL-Prüfung und Liste, rechts der Editor.
+///
+/// §27 A6/A7: Liste und Editor sind eigene Views; die Zeilen kommen vorab berechnet aus
+/// `AppModel.ruleList` (Prüfung und Filter nur bei Änderung neu, kein `if` im `ForEach`).
 struct RulesSettingsView: View {
     @Bindable var model: AppModel
+    @Environment(\.undoManager) private var undoManager
+
+    var body: some View {
+        HStack(spacing: 0) {
+            RuleSidebar(model: model, undoManager: undoManager)
+                .frame(width: 320)
+            Divider()
+            RuleEditorHost(model: model, onShowRule: showRule)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DS.textBackground)
+        }
+    }
+
+    /// „Regel n zeigen“ im Vorrang-Hinweis (§14.2, §22.4): Regel auswählen; ist sie nicht sichtbar,
+    /// im Prüfmodus „Alle Regeln“ zeigen, sonst Suche leeren.
+    private func showRule(_ id: UUID) {
+        if !model.ruleList.contains(id) {
+            if model.ruleCheckURL != nil {
+                model.ruleCheckShowsAll = true
+            } else {
+                model.ruleQuery = ""
+            }
+        }
+        model.selectedRuleID = id
+    }
+}
+
+// MARK: - Editor
+
+/// Rechte Seite: Editor der ausgewählten Regel, gebunden per ID (§27 A1).
+private struct RuleEditorHost: View {
+    @Bindable var model: AppModel
+    let onShowRule: (UUID) -> Void
+
+    var body: some View {
+        if let id = model.selectedRuleID, let index = model.ruleIndex(id) {
+            RuleEditorView(
+                rule: model.ruleBinding(id, fallback: model.config.rules[index]),
+                model: model,
+                position: index + 1,
+                onShowRule: onShowRule,
+                checkURL: model.ruleCheckURL
+            )
+            // Nur neu aufbauen, wenn die ausgewählte Regel von außen geändert wurde (§24.5, §27 A12).
+            .id("\(id)-\(model.editorResetCount)")
+        } else {
+            Text("Regel auswählen oder anlegen.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: - Seitenleiste
+
+private struct RuleSidebar: View {
+    @Bindable var model: AppModel
+    let undoManager: UndoManager?
     @FocusState private var searchFocused: Bool
 
     private var query: String { model.ruleQuery }
@@ -13,61 +74,19 @@ struct RulesSettingsView: View {
         model.ruleQueryForcedText == query && RuleCheck.url(from: query) != nil
     }
 
-    /// Ergebnis der URL-Prüfung (§22); nil = Textsuche bzw. kein Filter.
-    private var checkResult: RuleCheckResult? {
-        model.ruleCheckURL.map { RuleEngine.check(url: $0, context: model.ruleCheckContext, config: model.config) }
-    }
-
-    private func visibleIDs(_ check: RuleCheckResult?) -> [UUID] {
-        if let check {
-            return check.entries.filter { model.ruleCheckShowsAll || $0.matches }.map(\.ruleID)
-        }
-        return RuleSearch.filter(model.config.rules, query: query).map(\.id)
-    }
-
     var body: some View {
-        let check = checkResult
-        HStack(spacing: 0) {
-            sidebar(check)
-                .frame(width: 320)
-            Divider()
-            Group {
-                if let index = model.config.rules.firstIndex(where: { $0.id == model.selectedRuleID }) {
-                    RuleEditorView(
-                        rule: .element(of: $model.config.rules, at: index, fallback: model.config.rules[index]),
-                        model: model,
-                        position: index + 1,
-                        onShowRule: showRule,
-                        checkURL: model.ruleCheckURL
-                    )
-                    // Nach Neuladen von außen (§24.5) Editor-Zustand verwerfen.
-                    .id("\(model.config.rules[index].id)-\(model.externalReloadCount)")
-                } else {
-                    Text("Regel auswählen oder anlegen.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(DS.textBackground)
-        }
-    }
-
-    // MARK: Seitenleiste
-
-    private func sidebar(_ check: RuleCheckResult?) -> some View {
-        let visible = visibleIDs(check)
-        return VStack(alignment: .leading, spacing: 0) {
+        let list = model.ruleList
+        VStack(alignment: .leading, spacing: 0) {
             searchField
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
                 .padding(.bottom, isFiltering ? 4 : 6)
-            if let check {
+            if let check = list.check {
                 modeRow
                 RuleCheckCard(
                     result: check,
                     winner: check.decision.matchedRuleID.flatMap { model.rule(withID: $0) },
-                    winnerPosition: check.entries.first { $0.status == .wins }?.position,
+                    winnerPosition: check.decision.matchedRuleID.flatMap { list.positions[$0] },
                     defaultAction: model.config.defaultAction,
                     showsExtensionNote: model.extensionSettings != ExtensionSettings(),
                     source: $model.ruleCheckSource,
@@ -78,7 +97,7 @@ struct RulesSettingsView: View {
                 checkCountRow(check)
             } else if isFiltering {
                 HStack(spacing: 6) {
-                    Text("\(visible.count) von \(model.config.rules.count) Regeln")
+                    Text("\(list.rows.count) von \(model.config.rules.count) Regeln")
                         .font(DS.small)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 4)
@@ -91,36 +110,16 @@ struct RulesSettingsView: View {
                 .padding(.trailing, 12)
                 .padding(.bottom, 4)
             }
-            List(selection: $model.selectedRuleID) {
-                ForEach(visible, id: \.self) { id in
-                    if let index = model.config.rules.firstIndex(where: { $0.id == id }) {
-                        RuleRow(
-                            rule: $model.config.rules[index],
-                            position: index + 1,
-                            checkLine: check.flatMap { checkLine(for: model.config.rules[index], in: $0) }
-                        )
-                        .tag(id)
-                        .listRowSeparator(.hidden)
+            RuleListView(model: model, rows: list.rows, canReorder: !isFiltering, undoManager: undoManager)
+                .overlay {
+                    if model.config.rules.isEmpty {
+                        emptyText("Keine Regeln.\nJeder Link nutzt die Standardaktion.")
+                    } else if list.rows.isEmpty, list.check != nil {
+                        emptyText("Keine Regel trifft. Mit „Alle Regeln“ siehst du, woran es scheitert.")
+                    } else if list.rows.isEmpty {
+                        emptyText("Keine Regel passt zu „\(query)“.")
                     }
                 }
-                // Umsortieren nur ohne Filter/Prüfung – in einer gefilterten Liste wäre das Ziel mehrdeutig.
-                .onMove(perform: isFiltering ? nil : { from, to in
-                    model.config.rules.move(fromOffsets: from, toOffset: to)
-                })
-            }
-            // Seitenleisten-Optik; `.inset` statt `.sidebar`, damit die Auswahl als deckende
-            // Akzentfläche erscheint (wie im Mockup) und nicht als Vibrancy-Hervorhebung.
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if model.config.rules.isEmpty {
-                    emptyText("Keine Regeln.\nJeder Link nutzt die Standardaktion.")
-                } else if visible.isEmpty, check != nil {
-                    emptyText("Keine Regel trifft. Mit „Alle Regeln“ siehst du, woran es scheitert.")
-                } else if visible.isEmpty {
-                    emptyText("Keine Regel passt zu „\(query)“.")
-                }
-            }
 
             Divider()
             HStack(spacing: 2) {
@@ -133,7 +132,7 @@ struct RulesSettingsView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) {
                         pendingCounter
-                        footerLabel(check != nil)
+                        footerLabel(list.check != nil)
                     }
                     pendingCounter
                 }
@@ -228,31 +227,6 @@ struct RulesSettingsView: View {
         .padding(.bottom, 4)
     }
 
-    /// Status-Zeile einer Regel im Prüfmodus (§22.3).
-    private func checkLine(for rule: Rule, in check: RuleCheckResult) -> RuleCheckLine? {
-        guard let entry = check.entries.first(where: { $0.ruleID == rule.id }) else { return nil }
-        switch entry.status {
-        case .wins:
-            let rewrites = check.decision.finalURL != check.decision.originalURL
-            return RuleCheckLine(kind: .wins, text: rewrites ? "greift · schreibt um" : "greift")
-        case .shadowed(let winnerID):
-            let number = check.entries.first { $0.ruleID == winnerID }?.position
-            return RuleCheckLine(kind: .shadowed, text: "trifft, aber Regel \(number.map(String.init) ?? "?") greift zuerst")
-        case .disabledMatch:
-            return RuleCheckLine(kind: .disabledMatch, text: "Aus – würde treffen")
-        case .pendingMatch:
-            return RuleCheckLine(kind: .pending, text: "trifft, wartet auf Freigabe")
-        case .noMatch:
-            guard let index = entry.firstFailedCondition, rule.conditions.indices.contains(index) else {
-                return RuleCheckLine(kind: .noMatch, text: "trifft nicht")
-            }
-            return RuleCheckLine(
-                kind: .noMatch,
-                text: "trifft nicht · Bedingung \(index + 1) (\(RuleText.fieldName(rule.conditions[index])))"
-            )
-        }
-    }
-
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: model.ruleCheckURL == nil ? "magnifyingglass" : "link")
@@ -297,59 +271,80 @@ struct RulesSettingsView: View {
 
     // MARK: Aktionen
 
-    /// „+“: im Prüfmodus mit geprüfter URL als Test-URL und „Host ist ‹host›“ (§22.3).
+    /// „+“: im Prüfmodus mit geprüfter URL als Test-URL und „Host ist ‹host›“ (§22.3), Host in
+    /// Unicode-Form (§27 A4).
     private func addNew() {
         guard let url = model.ruleCheckURL else {
-            add(Rule(name: "Neue Regel"))
+            add(Rule(name: "Neue Regel"), actionName: "Neue Regel")
             return
         }
-        let host = url.host(percentEncoded: false) ?? ""
+        let host = HostName.unicode(url) ?? ""
         let condition: Condition = host.isEmpty
             ? .linkType(url.isFileURL ? .file : .web)
             : .host(TextMatch(op: .equals, value: host))
-        add(Rule(name: "Neue Regel", conditions: [condition], testURL: url.absoluteString))
+        add(Rule(name: "Neue Regel", conditions: [condition], testURL: url.absoluteString), actionName: "Neue Regel")
     }
 
-    private func add(_ rule: Rule) {
+    private func add(_ rule: Rule, actionName: String) {
         let checking = model.ruleCheckURL != nil
         if !checking { model.ruleQuery = "" }  // neue Regel muss sichtbar sein
-        let insertAt = model.config.rules.firstIndex { $0.id == model.selectedRuleID }.map { $0 + 1 }
-            ?? model.config.rules.count
-        model.config.rules.insert(rule, at: insertAt)
-        model.selectedRuleID = rule.id
+        let insertAt = model.ruleIndex(model.selectedRuleID).map { $0 + 1 } ?? model.config.rules.count
+        model.insertRule(rule, at: insertAt, undoManager: undoManager, actionName: actionName)
         // Prüfmodus bleibt; trifft die neue Regel nicht, auf „Alle Regeln“ schalten.
-        if checking, !visibleIDs(checkResult).contains(rule.id) { model.ruleCheckShowsAll = true }
-    }
-
-    /// „Regel n zeigen“ im Vorrang-Hinweis (§14.2, §22.4): Regel auswählen; ist sie nicht sichtbar,
-    /// im Prüfmodus „Alle Regeln“ zeigen, sonst Suche leeren.
-    private func showRule(_ id: UUID) {
-        if !visibleIDs(checkResult).contains(id) {
-            if model.ruleCheckURL != nil {
-                model.ruleCheckShowsAll = true
-            } else {
-                model.ruleQuery = ""
-            }
-        }
-        model.selectedRuleID = id
+        if checking, !model.ruleList.contains(rule.id) { model.ruleCheckShowsAll = true }
     }
 
     private func removeSelected() {
-        guard let index = model.config.rules.firstIndex(where: { $0.id == model.selectedRuleID }) else { return }
-        model.selectedRuleID = nil
-        model.config.rules.remove(at: index)
-        if !model.config.rules.isEmpty {
-            model.selectedRuleID = model.config.rules[min(index, model.config.rules.count - 1)].id
-        }
+        guard let id = model.selectedRuleID else { return }
+        model.deleteRule(id, undoManager: undoManager)
     }
 
     private func duplicateSelected() {
-        guard let original = model.config.rules.first(where: { $0.id == model.selectedRuleID }) else { return }
+        guard let original = model.rule(withID: model.selectedRuleID) else { return }
         var copy = original
         copy.id = UUID()
         copy.name = original.name + " Kopie"
-        add(copy)
+        add(copy, actionName: "Regel duplizieren")
     }
+}
+
+// MARK: - Liste
+
+/// Liste aus vorab berechneten Zeilen; Schreiben nur per ID über das Model (§27 A1).
+private struct RuleListView: View {
+    @Bindable var model: AppModel
+    let rows: [RuleRowModel]
+    /// Umsortieren nur ohne Filter/Prüfung – in einer gefilterten Liste wäre das Ziel mehrdeutig.
+    let canReorder: Bool
+    let undoManager: UndoManager?
+
+    var body: some View {
+        List(selection: $model.selectedRuleID) {
+            ForEach(rows) { row in
+                RuleRow(row: row, model: model)
+                    .equatable()
+                    .tag(row.id)
+                    .listRowSeparator(.hidden)
+            }
+            .onMove(perform: canReorder ? { from, to in
+                model.moveRules(fromOffsets: from, toOffset: to, undoManager: undoManager)
+            } : nil)
+        }
+        // Seitenleisten-Optik; `.inset` statt `.sidebar`, damit die Auswahl als deckende
+        // Akzentfläche erscheint (wie im Mockup) und nicht als Vibrancy-Hervorhebung.
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        // Wechselt die Zeilenart (Chips ↔ Status-Zeile, „Nur Treffer“ ↔ „Alle Regeln“), baut die Liste
+        // neu auf statt Zeilen anderer Höhe einzufügen: Das Einfügen löste in AppKit „reentrant
+        // operation in its NSTableView delegate“ aus (§27 A6/A7). Filtern, Löschen, Umsortieren diffen weiter.
+        .id(RuleListMode(checking: model.ruleCheckURL != nil, showsAll: model.ruleCheckShowsAll))
+    }
+}
+
+/// Darstellungsart der Liste; ein Wechsel ersetzt die Tabelle.
+private struct RuleListMode: Hashable {
+    var checking: Bool
+    var showsAll: Bool
 }
 
 // MARK: - URL-Prüfung
@@ -464,18 +459,31 @@ struct RuleTargetIcon: View {
     }
 }
 
-private struct RuleRow: View {
-    @Binding var rule: Rule
-    let position: Int
-    /// Prüfmodus (§22.3): Status-Zeile statt Chips.
-    var checkLine: RuleCheckLine?
+/// Zeile der Regel-Liste: bekommt den Wert und schreibt An/Aus per ID (§27 A1).
+private struct RuleRow: View, Equatable {
+    let row: RuleRowModel
+    let model: AppModel
     @Environment(\.backgroundProminence) private var prominence
 
+    private var rule: Rule { row.rule }
+    private var position: Int { row.position }
+    /// Prüfmodus (§22.3): Status-Zeile statt Chips.
+    private var checkLine: RuleCheckLine? { row.checkLine }
     private var onAccent: Bool { prominence == .increased }
+
+    nonisolated static func == (a: RuleRow, b: RuleRow) -> Bool {
+        MainActor.assumeIsolated { a.row == b.row && a.model === b.model }
+    }
+
+    private var enabled: Binding<Bool> {
+        let id = rule.id
+        let model = model
+        return Binding(get: { row.rule.enabled }, set: { value in model.updateRule(id) { $0.enabled = value } })
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Toggle("Aktiv", isOn: $rule.enabled)
+            Toggle("Aktiv", isOn: enabled)
                 .labelsHidden()
                 .toggleStyle(.checkbox)
                 .help(rule.enabled ? "Regel ist aktiv" : "Regel ist aus")

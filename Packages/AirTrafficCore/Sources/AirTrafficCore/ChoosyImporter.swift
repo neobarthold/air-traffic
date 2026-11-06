@@ -149,7 +149,11 @@ public enum ChoosyImporter {
             let parsed = parsePredicate(predicateFormat)
             switch parsed {
             case .always:
-                if index == behaviours.count - 1 {
+                if index == behaviours.count - 1, !enabled {
+                    // Deaktiviert in Choosy: nicht zur Standardaktion machen (§27 K6).
+                    rules.append(Rule(id: id, name: title, enabled: false, match: .all, conditions: [], action: action))
+                    notes.insert("TRUEPREDICATE als letzte Regel ist in Choosy deaktiviert – als deaktivierte Regel ohne Bedingungen importiert, nicht als Standardaktion", at: 0)
+                } else if index == behaviours.count - 1 {
                     defaultAction = action
                     let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))"
                     report.append(ImportNote(
@@ -157,8 +161,9 @@ public enum ChoosyImporter {
                         message: "TRUEPREDICATE als letzte Regel → Standardaktion\(suffix)."
                     ))
                     continue
+                } else {
+                    rules.append(Rule(id: id, name: title, enabled: enabled, match: .all, conditions: [], action: action))
                 }
-                rules.append(Rule(id: id, name: title, enabled: enabled, match: .all, conditions: [], action: action))
             case .conditions(let mode, let conditions):
                 rules.append(Rule(id: id, name: title, enabled: enabled, match: mode, conditions: conditions, action: action))
             case .unsupported(let reason):

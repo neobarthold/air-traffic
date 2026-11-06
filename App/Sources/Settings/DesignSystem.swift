@@ -12,6 +12,13 @@ enum DS {
     static let brand = Color("Brand")
     static let green = Color("StatusGreen")
     static let orange = Color("StatusOrange")
+    /// Schrift auf deckendem `orange` (§27 A18, ≥ 4,5:1): hell → Weiß auf dunklem Orange (6:1),
+    /// dunkel → fast Schwarz auf hellem Orange (9:1).
+    static let onOrange = Color(nsColor: NSColor(name: "AirTrafficOnOrange") { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.11, green: 0.07, blue: 0.0, alpha: 1)
+            : NSColor.white
+    })
     static let red = Color("StatusRed")
     /// Deckkraft getönter Flächen zu den Statusfarben.
     static let tint = 0.15
@@ -164,14 +171,15 @@ struct Chip: View {
             .font(tint == nil ? DS.small : DS.small.weight(.semibold))
             .lineLimit(1)
             .truncationMode(.tail)
-            .foregroundStyle(onAccent ? Color.white : (tint ?? Color.secondary))
+            .foregroundStyle(foreground)
             .padding(.horizontal, 6)
             .frame(height: 17)
             .frame(maxWidth: maxWidth, alignment: .leading)
             .fixedSize()
             .background {
                 if let tint {
-                    RoundedRectangle(cornerRadius: 5).fill(onAccent ? tint.opacity(0.85) : tint.opacity(DS.tint))
+                    // Auf der Akzentfläche deckend mit `onOrange`-Schrift statt Weiß auf 85 % (§27 A18).
+                    RoundedRectangle(cornerRadius: 5).fill(onAccent ? tint : tint.opacity(DS.tint))
                 } else if outlined {
                     RoundedRectangle(cornerRadius: 5)
                         .strokeBorder(onAccent ? Color.white.opacity(0.6) : DS.hairline, lineWidth: 0.5)
@@ -179,6 +187,32 @@ struct Chip: View {
                     RoundedRectangle(cornerRadius: 5).fill(onAccent ? Color.black.opacity(0.22) : DS.neutralFill)
                 }
             }
+    }
+}
+
+extension Chip {
+    private var foreground: Color {
+        if let tint { return onAccent ? DS.onOrange : tint }
+        return onAccent ? .white : .secondary
+    }
+}
+
+// MARK: - Knopf auf Orange (§27 A18)
+
+/// Hervorgehobener Knopf in Orange mit kontraststarker Schrift (statt `.borderedProminent` + `.tint`).
+struct OrangeProminentButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(DS.onOrange)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 22)
+            .background(RoundedRectangle(cornerRadius: 6).fill(DS.orange))
+            .overlay(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(configuration.isPressed ? 0.15 : 0)))
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

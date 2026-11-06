@@ -29,6 +29,9 @@ final class ChooserState {
     var isEditingURL = false
     /// Kopfzeile: „von ‹App›“ bzw. `ChooserRequest.sourceLabel`.
     let sourceText: String?
+    /// Herkunft der Anfrage, für ein erneutes Auswahlfenster nach einem Startfehler (§27 A2).
+    let sourceBundleIdentifier: String?
+    let sourceLabel: String?
     let sourceIcon: NSImage?
     /// Je Browser: läuft / nicht gefunden (beim Öffnen des Panels ermittelt).
     let running: [Bool]
@@ -40,6 +43,8 @@ final class ChooserState {
         running = browsers.map(Apps.isRunning)
         missing = browsers.map { Apps.url(for: $0) == nil }
         hint = request.hint
+        sourceBundleIdentifier = request.sourceBundleIdentifier
+        sourceLabel = request.sourceLabel
         if let label = request.sourceLabel {
             sourceText = label
             sourceIcon = nil
@@ -148,7 +153,8 @@ final class ChooserController: NSObject, NSWindowDelegate {
     }
 
     private func showNext() {
-        guard !queue.isEmpty else { return }
+        // Höchstens ein Panel: ein verzögertes `showNext` nach `close` darf kein zweites öffnen (§27 A3).
+        guard panel == nil, !queue.isEmpty else { return }
         let request = queue.removeFirst()
         shownURL = request.url
         shownAt = Date()
@@ -248,7 +254,15 @@ final class ChooserController: NSObject, NSWindowDelegate {
         // ⌥ gedrückt → App nicht aktivieren.
         let activates = !NSEvent.modifierFlags.contains(.option)
         let app = state.browsers[target]
-        if opener?.open(url, with: app, activates: activates) == true {
+        let retry = ChooserRequest(
+            url: url,
+            sourceBundleIdentifier: state.sourceBundleIdentifier,
+            sourceLabel: state.sourceLabel,
+            scope: .all,
+            hint: nil
+        )
+        let onFailure: @MainActor (String) -> Void = { [weak self] hint in self?.present(retry.with(hint: hint)) }
+        if opener?.open(url, with: app, activates: activates, onFailure: onFailure) == true {
             // Mit Aktivierung geht der Fokus an den Browser, sonst zurück an die vorherige App.
             close(panel, restoreFocus: !activates)
         } else {
@@ -573,19 +587,29 @@ struct ChooserView: View {
 private struct StructuredURL: View {
     let text: String
 
-    private var parts: (secure: Bool, host: String, rest: String)? {
+    /// Host wird im Text in der Kodierung gesucht, in der er dort steht (Punycode oder Unicode),
+    /// angezeigt in Unicode; der Tooltip nennt bei IDN beide Formen (§27 A4).
+    private var parts: (secure: Bool, host: String, hostHelp: String, rest: String)? {
         guard let components = URLComponents(string: text.trimmingCharacters(in: .whitespaces)),
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = components.host, !host.isEmpty,
-              let hostRange = text.range(of: host, options: .caseInsensitive)
+              let host = components.host, !host.isEmpty
         else { return nil }
-        var hostText = String(text[hostRange])
+        let candidates = [components.encodedHost, components.percentEncodedHost, host, HostName.ascii(host)]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        guard let hostRange = candidates.lazy.compactMap({ text.range(of: $0, options: .caseInsensitive) }).first
+        else { return nil }
+        let written = String(text[hostRange])
+        let unicode = HostName.unicode(written)
+        var hostText = HostName.display(written)
         var rest = String(text[hostRange.upperBound...])
         if let port = components.port, rest.hasPrefix(":\(port)") {
             hostText += ":\(port)"
             rest.removeFirst(":\(port)".count)
         }
-        return (scheme == "https", hostText, rest)
+        let ascii = HostName.ascii(unicode)
+        let help = ascii.caseInsensitiveCompare(unicode) == .orderedSame ? hostText : "\(unicode) (\(ascii))"
+        return (scheme == "https", hostText, help, rest)
     }
 
     var body: some View {
@@ -603,7 +627,7 @@ private struct StructuredURL: View {
                         .lineLimit(1)
                         .truncationMode(.head)
                         .layoutPriority(1)
-                        .help(parts.host)
+                        .help(parts.hostHelp)
                     Text(parts.rest).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             } else {

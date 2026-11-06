@@ -155,7 +155,8 @@ struct AppMenu: View {
                 Button(noneTitle) { onSelect(nil) }
                 Divider()
             }
-            ForEach(browsers, id: \.path) { app in
+            // Offset statt Pfad: doppelte Einträge bleiben unterscheidbar (§27 A19).
+            ForEach(Array(browsers.enumerated()), id: \.offset) { _, app in
                 Button {
                     onSelect(app)
                 } label: {
@@ -288,12 +289,12 @@ struct SourceAppField: View {
                 .frame(minWidth: 120)
             Menu {
                 Section("Laufend") {
-                    ForEach(Apps.runningRegularApps(), id: \.path) { app in
+                    ForEach(Array(Apps.runningRegularApps().enumerated()), id: \.offset) { _, app in
                         Button(app.displayName) { bundleIdentifier = app.bundleIdentifier ?? "" }
                     }
                 }
                 Menu("Installiert") {
-                    ForEach(Apps.installedApps(), id: \.path) { app in
+                    ForEach(Array(Apps.installedApps().enumerated()), id: \.offset) { _, app in
                         Button(app.displayName) { bundleIdentifier = app.bundleIdentifier ?? "" }
                     }
                 }

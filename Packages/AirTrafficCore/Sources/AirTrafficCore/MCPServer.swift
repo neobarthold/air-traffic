@@ -4,7 +4,8 @@ import Foundation
 /// `handle(line:)` ist rein bis auf die Agenten-Operationen; die Schleife liegt im Tool.
 public struct MCPServer: Sendable {
     public static let defaultProtocolVersion = "2025-06-18"
-    public static let supportedProtocolVersions: Set<String> = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
+    /// Ohne `2025-03-26`: diese Version verlangt JSON-RPC-Batches, die der Server nicht kann (§27 K12).
+    public static let supportedProtocolVersions: Set<String> = ["2024-11-05", "2025-06-18", "2025-11-25"]
 
     public static let instructions = """
         Air Traffic leitet Links nach Regeln an Browser und Apps weiter. Rufe zuerst describe_rule_format und list_rules auf; \
@@ -26,12 +27,22 @@ public struct MCPServer: Sendable {
     // MARK: JSON-RPC
 
     /// Eine eingehende Zeile → Antwortzeile (kompaktes JSON) oder nil (Benachrichtigung, Leerzeile).
+    ///
+    /// Zahlen-IDs gehen roh zurück (§27 K12): `JSONValue` speichert Zahlen als `Double`, große
+    /// Ganzzahlen wie 9007199254740993 kämen sonst verändert an.
     public func handle(line: String) -> String? {
         guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         guard let message = JSONValue.parse(line) else {
             return Self.error(id: .null, code: -32700, message: "Parse error").jsonString()
         }
-        return handle(message: message)?.jsonString()
+        guard var response = handle(message: message) else { return nil }
+        guard let raw = RawJSON.topLevelNumber(forKey: "id", in: line),
+              case .object(var object) = response, case .number? = object["id"]
+        else { return response.jsonString() }
+        let placeholder = "__airtraffic_raw_id_\(UUID().uuidString)__"
+        object["id"] = .string(placeholder)
+        response = .object(object)
+        return response.jsonString().replacingOccurrences(of: "\"\(placeholder)\"", with: raw)
     }
 
     public func handle(message: JSONValue) -> JSONValue? {
@@ -419,4 +430,85 @@ enum MCPTools {
             }
         ),
     ]
+}
+
+// MARK: - Rohe JSON-Zahlen (§27 K12)
+
+/// Liest den Rohtext einer Zahl auf oberster Ebene eines JSON-Objekts, ohne über `Double` zu gehen.
+enum RawJSON {
+    /// Rohtext der Zahl unter `key` im obersten Objekt; nil, wenn der Wert keine Zahl ist.
+    static func topLevelNumber(forKey key: String, in text: String) -> String? {
+        let bytes = Array(text.utf8)
+        var i = 0
+        func skipWhitespace() { while i < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[i]) { i += 1 } }
+        /// Überspringt einen String ab `"`; liefert seinen dekodierten Inhalt.
+        func readString() -> String? {
+            guard i < bytes.count, bytes[i] == 0x22 else { return nil }
+            let start = i
+            i += 1
+            while i < bytes.count {
+                if bytes[i] == 0x5C { i += 2; continue }
+                if bytes[i] == 0x22 {
+                    i += 1
+                    let literal = String(decoding: bytes[start..<i], as: UTF8.self)
+                    return try? JSONDecoder().decode(String.self, from: Data(literal.utf8))
+                }
+                i += 1
+            }
+            return nil
+        }
+        /// Überspringt einen beliebigen Wert; liefert den Rohtext.
+        func skipValue() -> String? {
+            skipWhitespace()
+            guard i < bytes.count else { return nil }
+            let start = i
+            switch bytes[i] {
+            case 0x22:
+                guard readString() != nil else { return nil }
+            case 0x7B, 0x5B:
+                var depth = 0
+                while i < bytes.count {
+                    switch bytes[i] {
+                    case 0x22: guard readString() != nil else { return nil }; continue
+                    case 0x7B, 0x5B: depth += 1
+                    case 0x7D, 0x5D:
+                        depth -= 1
+                        if depth == 0 { i += 1; return String(decoding: bytes[start..<i], as: UTF8.self) }
+                    default: break
+                    }
+                    i += 1
+                }
+                return nil
+            default:
+                while i < bytes.count, ![0x2C, 0x7D, 0x5D, 0x20, 0x09, 0x0A, 0x0D].contains(bytes[i]) { i += 1 }
+            }
+            return String(decoding: bytes[start..<i], as: UTF8.self)
+        }
+
+        skipWhitespace()
+        guard i < bytes.count, bytes[i] == 0x7B else { return nil }
+        i += 1
+        var found: String?
+        while true {
+            skipWhitespace()
+            guard i < bytes.count else { return nil }
+            if bytes[i] == 0x7D { break }
+            guard let name = readString() else { return nil }
+            skipWhitespace()
+            guard i < bytes.count, bytes[i] == 0x3A else { return nil }
+            i += 1
+            guard let value = skipValue() else { return nil }
+            // Doppelte Schlüssel: der letzte gilt (wie beim Dekodieren).
+            if name == key { found = value }
+            skipWhitespace()
+            guard i < bytes.count else { return nil }
+            if bytes[i] == 0x2C { i += 1; continue }
+            if bytes[i] == 0x7D { break }
+            return nil
+        }
+        guard let found, let first = found.utf8.first, first == 0x2D || (0x30...0x39).contains(first),
+              found.utf8.allSatisfy({ (0x30...0x39).contains($0) || [0x2D, 0x2B, 0x2E, 0x65, 0x45].contains($0) })
+        else { return nil }
+        return found
+    }
 }
