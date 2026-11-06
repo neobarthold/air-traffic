@@ -161,7 +161,19 @@ Aufbau:
 Erweiterung dann erst nach Safari → Einstellungen → Erweitert → „Funktionen für Webentwickler einblenden“
 und Entwickler → „Nicht signierte Erweiterungen erlauben“ (gilt bis zum Beenden von Safari).
 Ist zusätzlich eine installierte Air Traffic in `/Programme` vorhanden, entscheidet macOS, welche Kopie
-`airtraffic://` öffnet – zum Testen nur eine Kopie registriert lassen.
+`airtraffic://` öffnet – zum Testen nur eine Kopie registriert lassen. Safari führt die Erweiterung unter
+ihrer Team-ID; im Debug-Build zeigt der Tab **Safari** deshalb „Entwicklungs-Build“ statt des Status.
+Startet man den Debug-Build, meldet macOS dessen Erweiterung an. Nach dem Testen wieder auf die installierte
+App umstellen:
+
+```sh
+LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREG" -u "build/Build/Products/Debug/Air Traffic.app"
+"$LSREG" -f "/Applications/Air Traffic.app"
+```
+
+Wurde `airtraffic` aus dem Debug-Build installiert, zeigt der Tab **CLI & MCP** danach „Zeigt auf eine
+andere App-Kopie“ – einmal „Aktualisieren“ klicken.
 
 ## Tests
 
@@ -199,9 +211,9 @@ Die README-Screenshots erzeugt `scripts/screenshots.sh` (baut die App und render
 ## Release
 
 ```sh
-scripts/release.sh 1.4 --notes "- Neu: …"      # oder Abschnitt „## 1.4“ in CHANGELOG.md
-scripts/release.sh 1.4 --dry-run               # nur bauen und signieren
-scripts/release.sh 1.4 --dry-run --no-sign     # nur bauen
+scripts/release.sh 1.8 --notes "- Neu: …"      # oder Abschnitt „## 1.8“ in CHANGELOG.md
+scripts/release.sh 1.8 --dry-run               # nur bauen und signieren
+scripts/release.sh 1.8 --dry-run --no-sign     # nur bauen
 ```
 
 Das Skript setzt `MARKETING_VERSION` und `CURRENT_PROJECT_VERSION` (Build + 1) in `project.yml`, baut
@@ -211,7 +223,8 @@ und lässt sie notarisieren, packt `build/dist/Air-Traffic-<version>.zip`, signi
 `sign_update` (EdDSA-Schlüssel im Schlüsselbund, Account `air-traffic`; die Werkzeuge lädt es bei Bedarf
 nach `build/sparkle-tools`), ergänzt `appcast.xml` und legt das GitHub-Release `v<version>` mit dem ZIP
 an. Commit und Push macht es nicht – es druckt die Befehle dafür. Erst mit dem Push von `appcast.xml`
-sehen installierte Apps das Update.
+sehen installierte Apps das Update. `project.yml` und `appcast.xml` erst committen, wenn das Skript ohne
+Fehler durchgelaufen ist.
 
 ## Datenschutz
 
@@ -223,8 +236,12 @@ sehen installierte Apps das Update.
 - Der OpenRouter-API-Key liegt nur im macOS-Schlüsselbund, nie in der Konfigurationsdatei oder im Log.
   Claude Code und Codex nutzen ihre eigene Anmeldung; Air Traffic sieht keine Zugangsdaten.
 - Die Update-Prüfung lädt nur `appcast.xml` von GitHub; Updates werden über ihre EdDSA-Signatur geprüft.
+- `airtraffic` und der MCP-Server arbeiten nur lokal mit der Konfigurationsdatei: kein Netzwerk, kein
+  Schlüsselbund, sie öffnen keine Links und ändern nicht den Standardbrowser. Was ein KI-Agent über den
+  MCP-Server liest (deine Regeln), sieht natürlich auch dessen Anbieter.
 
-Konfiguration: `~/Library/Application Support/Air Traffic/config.json`.
+Konfiguration: `~/Library/Application Support/Air Traffic/config.json`, Sicherungen der letzten 30
+Änderungen über `airtraffic` im Ordner `backups/` daneben.
 
 ## Lizenz
 
