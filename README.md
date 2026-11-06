@@ -33,8 +33,8 @@ Standardaktion – zum Beispiel ein kleines Auswahlfenster mit allen Browsern.
   sobald weder Auswahlfenster noch Einstellungen offen sind.
 - **Hell und dunkel:** folgt standardmäßig macOS; unter Allgemein → Darstellung fest auf Hell oder Dunkel stellbar.
 
-Die Einstellungen haben fünf Tabs: **Allgemein** (Standardbrowser, Standardaktion, KI-Assistent,
-Darstellung), **Browser**, **Regeln**, **Safari** und **Updates & Import**.
+Die Einstellungen haben sechs Tabs: **Allgemein** (Standardbrowser, Standardaktion, KI-Assistent,
+Darstellung, Choosy-Import und Konfigurationsdatei), **Browser**, **Regeln**, **Safari**, **CLI & MCP** und **Updates**.
 
 | Auswahlfenster | Allgemein |
 |---|---|
@@ -48,9 +48,9 @@ Darstellung), **Browser**, **Regeln**, **Safari** und **Updates & Import**.
 |---|---|
 | ![Browser](docs/images/browsers-light.png) | ![KI-Assistent](docs/images/assistant-light.png) |
 
-| Safari | Updates & Import |
+| Safari | CLI & MCP |
 |---|---|
-| ![Safari](docs/images/safari-light.png) | ![Updates & Import](docs/images/maintenance-light.png) |
+| ![Safari](docs/images/safari-light.png) | ![CLI & MCP](docs/images/cli-light.png) |
 
 Alle Screenshots stammen aus der neutralen Beispiel-Konfiguration [`docs/demo-config.json`](docs/demo-config.json).
 
@@ -93,8 +93,7 @@ Die App bringt das Programm `airtraffic` mit (`Air Traffic.app/Contents/Helpers/
 lassen sich Regeln im Terminal auflisten, prüfen, anlegen, ändern, umsortieren und löschen – mit
 derselben Logik wie die App. `airtraffic mcp` macht dasselbe als MCP-Server für KI-Agenten.
 
-**Installieren:** Einstellungen → Tab **Updates & Import** → „Kommandozeile & KI-Agenten“ →
-„Installieren“. Das legt den Symlink `~/.local/bin/airtraffic` an (kein Administrator nötig);
+**Installieren:** Einstellungen → Tab **CLI & MCP** → „Installieren“. Das legt den Symlink `~/.local/bin/airtraffic` an (kein Administrator nötig);
 „Entfernen“ löscht nur diesen Symlink. Fehlt `~/.local/bin` im `PATH`, zeigt die App die Zeile für
 `~/.zshrc`: `export PATH="$HOME/.local/bin:$PATH"`.
 

@@ -2,7 +2,7 @@ import AirTrafficCore
 import AppKit
 import SwiftUI
 
-/// Einstellungen → „Updates & Import“ → „Kommandozeile & KI-Agenten“ (SPEC §24.7).
+/// Einstellungen → Tab „CLI & MCP“ (SPEC §24.7, §25).
 struct CommandLineSettingsSection: View {
     /// Symlink-Ort und Helper; Parameter, damit Snapshots und Tests nichts im echten Home anfassen müssen.
     var linkURL = CommandLineInstall.defaultLinkURL()

@@ -572,3 +572,11 @@ Tab „Updates & Import“, neuer Abschnitt „Kommandozeile & KI-Agenten“ (`t
 - README: Abschnitt „Kommandozeile & KI-Agenten“ mit Installation, Beispielen, MCP-Einbindung.
 - `--snapshot`: Tab „Updates & Import“ mit neuem Abschnitt.
 - Nicht-Ziele: Browserliste, Standardaktion, KI-Einstellungen per CLI ändern; Netzwerk-Transport (HTTP/SSE); Authentifizierung.
+
+## 25. Tabs neu geordnet (v1.8)
+
+Ersetzt die Tab-Aufteilung aus §23.3/§24.7:
+- Tabs: Allgemein · Browser · Regeln · Safari · **CLI & MCP** (`terminal`) · **Updates** (`arrow.triangle.2.circlepath`, immer zuletzt). `SettingsTab`: `general, browsers, rules, safari, cli, updates`.
+- „CLI & MCP“ enthält den Abschnitt „Kommandozeile & KI-Agenten“ (§24.7), „Updates“ nur den Abschnitt Updates (§17).
+- „Import & Konfiguration“ (Choosy-Import, Datei-Pfad, „Air Traffic beenden“) steht wieder in **Allgemein, ganz unten** (nach Darstellung).
+- `--snapshot`: `cli-*`, `updates-*` statt `maintenance-*`; `general-full-*` zeigt Allgemein vollständig.

@@ -2,21 +2,7 @@ import AirTrafficCore
 import AppKit
 import SwiftUI
 
-/// Einstellungen → „Updates & Import“ (§23.3, §24.7): Updates (§17), Kommandozeile & KI-Agenten
-/// sowie Import & Konfiguration.
-struct MaintenanceSettingsView: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        SettingsPage {
-            UpdatesSettingsSection(updates: model.updates)
-            CommandLineSettingsSection()
-            ImportSettingsSection(model: model)
-        }
-    }
-}
-
-/// „Import & Konfiguration“: Choosy-Import, Datei-Pfad + „Im Finder zeigen“, „Air Traffic beenden“.
+/// Einstellungen → Allgemein, ganz unten (§25): „Import & Konfiguration“: Choosy-Import, Datei-Pfad + „Im Finder zeigen“, „Air Traffic beenden“.
 struct ImportSettingsSection: View {
     @Bindable var model: AppModel
     @State private var preview: ImportPreview?

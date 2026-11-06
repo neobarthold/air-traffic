@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 /// Einstellungen → Allgemein (§23.4): Problem-Hinweis · Status · „Wenn keine Regel passt“ ·
-/// KI-Assistent · Darstellung. Safari und Updates & Import haben eigene Tabs (§23.2, §23.3).
+/// KI-Assistent · Darstellung · Import & Konfiguration (§25). Safari, CLI & MCP und Updates haben eigene Tabs.
 struct GeneralSettingsView: View {
     @Bindable var model: AppModel
     @State private var isDefault = Apps.isAirTrafficDefaultBrowser
@@ -33,6 +33,8 @@ struct GeneralSettingsView: View {
             AssistantSettingsSection(model: model)
 
             appearanceSection
+
+            ImportSettingsSection(model: model)
         }
         .onAppear(perform: refresh)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

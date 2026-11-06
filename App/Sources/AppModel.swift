@@ -4,7 +4,7 @@ import Observation
 
 /// Tabs des Einstellungsfensters in Toolbar-Reihenfolge (§23.5).
 enum SettingsTab: Hashable, CaseIterable {
-    case general, browsers, rules, safari, maintenance
+    case general, browsers, rules, safari, cli, updates
 
     var label: String {
         switch self {
@@ -12,7 +12,8 @@ enum SettingsTab: Hashable, CaseIterable {
         case .browsers: "Browser"
         case .rules: "Regeln"
         case .safari: "Safari"
-        case .maintenance: "Updates & Import"
+        case .cli: "CLI & MCP"
+        case .updates: "Updates"
         }
     }
 
@@ -22,7 +23,8 @@ enum SettingsTab: Hashable, CaseIterable {
         case .browsers: "globe"
         case .rules: "point.topleft.down.to.point.bottomright.curvepath"
         case .safari: "safari"
-        case .maintenance: "arrow.triangle.2.circlepath"
+        case .cli: "terminal"
+        case .updates: "arrow.triangle.2.circlepath"
         }
     }
 }

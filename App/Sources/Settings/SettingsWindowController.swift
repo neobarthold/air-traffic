@@ -88,7 +88,8 @@ final class SettingsTabViewController: NSTabViewController {
             case .browsers: add(BrowsersSettingsView(model: model), tab: tab)
             case .rules: add(RulesSettingsView(model: model), tab: tab)
             case .safari: add(SafariSettingsView(model: model), tab: tab)
-            case .maintenance: add(MaintenanceSettingsView(model: model), tab: tab)
+            case .cli: add(SettingsPage { CommandLineSettingsSection() }, tab: tab)
+            case .updates: add(SettingsPage { UpdatesSettingsSection(updates: model.updates) }, tab: tab)
             }
         }
     }
