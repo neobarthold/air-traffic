@@ -1,5 +1,7 @@
 # Air Traffic
 
+> **Umgezogen:** Air Traffic wird jetzt unter **[neoskop/air-traffic](https://github.com/neoskop/air-traffic)** entwickelt. Dieses Repository ist archiviert. Installierte Versionen aktualisieren sich automatisch auf die neue Version.
+
 Air Traffic ist ein „Browser-Verteiler“ für macOS. Die App wird als Standardbrowser eingetragen,
 nimmt jeden angeklickten Link entgegen, prüft ihn gegen deine Regeln, schreibt ihn bei Bedarf um
 und öffnet ihn im passenden Browser oder in der passenden App. Passt keine Regel, entscheidet die
