@@ -35,13 +35,25 @@ final class AppModel {
 
     var config: Config {
         didSet {
-            if config != oldValue { scheduleSave() }
+            if config != oldValue, !isApplyingExternalChange { scheduleSave() }
             if config.appearance != oldValue.appearance { applyAppearanceIfEnabled() }
         }
     }
 
     /// Letzter Lade-/Speicherfehler für die Anzeige in den Einstellungen.
     var problem: String?
+
+    // MARK: Änderungen von außen (§24.5)
+
+    /// Hinweis „Regeln wurden von außen geändert und neu geladen.“ (orange Zeile, 6 s oder Klick).
+    private(set) var showsExternalChangeNotice = false
+    /// Zählt Neuladen von außen; Ansichten mit eigenem Zustand (Regel-Editor) bauen sich damit neu auf.
+    private(set) var externalReloadCount = 0
+    /// Fingerabdruck der zuletzt geladenen/gespeicherten Datei; Grundlage der Konfliktentscheidung.
+    @ObservationIgnored private var knownFingerprint: String?
+    @ObservationIgnored private var isApplyingExternalChange = false
+    @ObservationIgnored private var watcher: ConfigFileWatcher?
+    @ObservationIgnored private var noticeTask: Task<Void, Never>?
 
     /// Ausgewählter Tab im Einstellungsfenster (z. B. Sprung zu „Allgemein“ aus dem Regel-Editor).
     var settingsTab: SettingsTab = .general
@@ -123,8 +135,9 @@ final class AppModel {
         self.cliLocator = cliLocator
         self.persists = persists
         do {
-            if let loaded = try store.load() {
-                config = loaded
+            if let loaded = try store.loadSnapshot() {
+                config = loaded.config
+                knownFingerprint = loaded.fingerprint
                 Log.config.info("Konfiguration geladen: \(store.fileURL.path, privacy: .public)")
             } else {
                 config = AppModel.firstRunConfig()
@@ -145,6 +158,9 @@ final class AppModel {
             saveNow()
         }
         refreshAssistantKey()
+        if persists {
+            watcher = ConfigFileWatcher(fileURL: store.fileURL) { [weak self] in self?.checkForExternalChange() }
+        }
     }
 
     /// Erster Start: installierte Browser erkennen, Auswahl zeigen, keine Regeln.
@@ -181,16 +197,80 @@ final class AppModel {
         saveNow()
     }
 
+    /// Koordiniert und atomar; wurde die Datei inzwischen von außen geändert, wird nicht
+    /// überschrieben, sondern neu geladen (§24.5).
     private func saveNow() {
         saveTask = nil
         guard persists else { return }
         do {
-            try store.save(config)
-            if problem?.hasPrefix("Speichern") == true { problem = nil }
+            switch try store.save(config, ifUnchangedSince: knownFingerprint) {
+            case .saved(let fingerprint):
+                knownFingerprint = fingerprint
+                if problem?.hasPrefix("Speichern") == true || problem?.hasPrefix("Von außen") == true { problem = nil }
+            case .conflict(let current):
+                Log.config.info("Speichern übersprungen: Konfiguration wurde von außen geändert")
+                applyExternal(current)
+            case .conflictUnreadable(let message):
+                problem = "Von außen geändert, aber nicht lesbar (\(message)) – deine Änderung wurde nicht gespeichert."
+            }
         } catch {
             problem = "Speichern fehlgeschlagen: \(error.localizedDescription)"
             Log.config.error("Speichern fehlgeschlagen: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    // MARK: Änderungen von außen (§24.5)
+
+    /// Nach einer Datei-Benachrichtigung: eigene Speichervorgänge (gleicher Fingerabdruck) ignorieren.
+    func checkForExternalChange() {
+        guard persists else { return }
+        let data: Data?
+        do {
+            data = try store.coordinatedData()
+        } catch {
+            Log.config.error("Konfiguration nicht lesbar: \(String(describing: error), privacy: .public)")
+            return
+        }
+        guard ConfigSync.changeDecision(known: knownFingerprint, current: data.map(ConfigStore.fingerprint)) == .reload,
+              let data
+        else { return }
+        do {
+            applyExternal(ConfigSnapshot(config: try ConfigStore.decode(data), fingerprint: ConfigStore.fingerprint(data)))
+        } catch {
+            // Nicht übernehmen und nicht überschreiben: Speichern meldet den Konflikt, bis die Datei wieder gültig ist.
+            problem = "Von außen geändert, aber nicht lesbar (\(error.localizedDescription))."
+            Log.config.error("Externe Änderung nicht lesbar: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Übernimmt den Stand von der Platte; eine ausstehende eigene Änderung verfällt.
+    private func applyExternal(_ snapshot: ConfigSnapshot) {
+        saveTask?.cancel()
+        saveTask = nil
+        knownFingerprint = snapshot.fingerprint
+        isApplyingExternalChange = true
+        config = snapshot.config
+        isApplyingExternalChange = false
+        if let id = selectedRuleID, !config.rules.contains(where: { $0.id == id }) { selectedRuleID = nil }
+        if problem?.hasPrefix("Von außen") == true { problem = nil }
+        externalReloadCount += 1
+        Log.config.info("Konfiguration von außen geändert und neu geladen")
+        showExternalChangeNotice()
+    }
+
+    private func showExternalChangeNotice() {
+        showsExternalChangeNotice = true
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.showsExternalChangeNotice = false
+        }
+    }
+
+    func dismissExternalChangeNotice() {
+        noticeTask?.cancel()
+        showsExternalChangeNotice = false
     }
 
     // MARK: Darstellung (§23.1)

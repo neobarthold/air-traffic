@@ -36,6 +36,12 @@ targets:
         product: Sparkle
       - target: SafariExtension
         embed: true
+      # Kommandozeilen-Tool + MCP-Server (SPEC §24), eingebettet unter Contents/Helpers/airtraffic.
+      - target: AirTrafficCLI
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
       - sdk: SafariServices.framework
     settings:
       base:
@@ -87,3 +93,26 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
+
+  # Kommandozeile und MCP-Server für KI-Agenten (SPEC §24). Produkt `airtraffic`; der Target-Name
+  # weicht ab, weil „airtraffic“ und „AirTraffic“ auf APFS (ohne Groß/Klein) dieselben Build-Ordner wären.
+  AirTrafficCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: CLI/Sources
+    dependencies:
+      - package: AirTrafficCore
+    settings:
+      base:
+        PRODUCT_NAME: airtraffic
+        PRODUCT_BUNDLE_IDENTIFIER: de.neoskop.AirTraffic.cli
+        # Info.plist im Binary: Version für `--version` und MCP-serverInfo, Kennung für die Signatur.
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: NO
+        SWIFT_STRICT_CONCURRENCY: complete
+        SKIP_INSTALL: YES

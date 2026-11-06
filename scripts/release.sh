@@ -4,7 +4,7 @@
 #   scripts/release.sh <version> [--notes "<Text>"] [--dry-run] [--no-sign]
 #
 # Ablauf: Versionen setzen (Build +1) → xcodegen → Release-Build → Developer-ID-Signatur
-# (inkl. Safari-Erweiterung) →
+# (inkl. Safari-Erweiterung und Kommandozeilen-Tool) →
 # Notarisierung + Staple → ZIP → Sparkle-Signatur
 # (sign_update --account air-traffic, Schlüssel aus dem Schlüsselbund) → appcast.xml ergänzen →
 # gh release create v<version>. Commit und Push macht das Skript nicht; es druckt die nächsten Befehle.
@@ -151,12 +151,23 @@ check_appex() {
   entitlements="$(codesign -d --entitlements - "$APPEX" 2>&1)" || die "Entitlements der Safari-Erweiterung nicht lesbar"
   grep -q "com.apple.security.app-sandbox" <<<"$entitlements" || die "Safari-Erweiterung ohne App-Sandbox signiert"
 }
+# Kommandozeilen-Tool + MCP-Server (SPEC §24): eingebettet, ausführbar, gleiche Version wie die App.
+HELPER="$APP/Contents/Helpers/airtraffic"
+[[ -x "$HELPER" ]] || die "Kommandozeilen-Tool fehlt: Contents/Helpers/airtraffic"
+HELPER_VERSION="$(AIRTRAFFIC_CONFIG_PATH=/dev/null "$HELPER" --version 2>&1)" || die "Kommandozeilen-Tool startet nicht: $HELPER_VERSION"
+[[ "$HELPER_VERSION" == "airtraffic $VERSION ($BUILD)" ]] \
+  || die "Version des Kommandozeilen-Tools passt nicht: $HELPER_VERSION"
+check_helper() {
+  codesign --verify --strict "$HELPER" || die "Signatur des Kommandozeilen-Tools ungültig"
+}
 codesign --verify --deep --strict "$APP" || die "Code-Signatur ungültig"
 check_appex
-echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle und Safari-Erweiterung eingebettet"
+check_helper
+echo "OK: $APP_NAME.app $VERSION ($BUILD), Sparkle, Safari-Erweiterung und Kommandozeilen-Tool eingebettet"
 
 # --- Developer ID + Notarisierung ---------------------------------------------
-# Signiert von innen nach außen (Sparkle-Helfer → Framework → Safari-Erweiterung → App), Hardened Runtime + Zeitstempel,
+# Signiert von innen nach außen (Sparkle-Helfer → Framework → Safari-Erweiterung → Kommandozeilen-Tool → App),
+# Hardened Runtime + Zeitstempel,
 # dann Notarisierung bei Apple und Ticket an die App heften. Mit --no-sign entfällt alles (nur Probelauf).
 if [[ $NO_SIGN -eq 0 ]]; then
   IDENTITIES="$(security find-identity -v -p codesigning)"
@@ -172,9 +183,12 @@ if [[ $NO_SIGN -eq 0 ]]; then
   sign "$APP/Contents/Frameworks/Sparkle.framework"
   # Safari-Erweiterung vor der App, mit eigenen Entitlements (nur App-Sandbox).
   sign --entitlements "$APPEX_ENTITLEMENTS" "$APPEX"
+  # Kommandozeilen-Tool (SPEC §24.1) vor der App; Kennung aus der eingebetteten Info.plist.
+  sign "$HELPER"
   sign "$APP"
   codesign --verify --deep --strict "$APP" || die "Developer-ID-Signatur ungültig"
   check_appex
+  check_helper
   # Notarisierung lehnt get-task-allow ab; die Debug-Entitlements aus dem Build dürfen nicht überleben.
   APPEX_SIGNED_ENTITLEMENTS="$(codesign -d --entitlements - "$APPEX" 2>&1)"
   if grep -q "get-task-allow" <<<"$APPEX_SIGNED_ENTITLEMENTS"; then
@@ -185,6 +199,13 @@ if [[ $NO_SIGN -eq 0 ]]; then
   grep -q "TeamIdentifier=$TEAM_ID" <<<"$APP_SIGN_INFO" || die "TeamIdentifier ist nicht $TEAM_ID"
   APPEX_SIGN_INFO="$(codesign -dv "$APPEX" 2>&1)"
   grep -q "TeamIdentifier=$TEAM_ID" <<<"$APPEX_SIGN_INFO" || die "TeamIdentifier der Safari-Erweiterung ist nicht $TEAM_ID"
+  HELPER_SIGN_INFO="$(codesign -dv "$HELPER" 2>&1)"
+  grep -q "TeamIdentifier=$TEAM_ID" <<<"$HELPER_SIGN_INFO" || die "TeamIdentifier des Kommandozeilen-Tools ist nicht $TEAM_ID"
+  grep -q "flags=.*runtime" <<<"$HELPER_SIGN_INFO" || die "Kommandozeilen-Tool ohne Hardened Runtime signiert"
+  HELPER_SIGNED_ENTITLEMENTS="$(codesign -d --entitlements - "$HELPER" 2>&1)"
+  if grep -q "get-task-allow" <<<"$HELPER_SIGNED_ENTITLEMENTS"; then
+    die "Kommandozeilen-Tool trägt noch get-task-allow"
+  fi
 
   step "Notarisierung (Profil „$NOTARY_PROFILE“, dauert meist 1–5 min)"
   NOTARIZE_ZIP="$DIST/notarize-$VERSION.zip"

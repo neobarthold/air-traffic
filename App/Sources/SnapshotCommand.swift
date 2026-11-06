@@ -10,6 +10,8 @@ enum SnapshotCommand {
 
     private static let settingsSize = NSSize(width: 980, height: 720)
     private static let fullPageSize = NSSize(width: 980, height: 800)
+    /// „Updates & Import“ mit allen drei Abschnitten inkl. „Kommandozeile & KI-Agenten“ (§24.8).
+    private static let maintenanceSize = NSSize(width: 980, height: 780)
 
     static func run(arguments: [String]) async -> Int32 {
         guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else {
@@ -48,7 +50,7 @@ enum SnapshotCommand {
                 ("general", .general, settingsSize, nil),
                 ("browsers", .browsers, settingsSize, nil),
                 ("safari", .safari, settingsSize, nil),
-                ("maintenance", .maintenance, settingsSize, nil),
+                ("maintenance", .maintenance, maintenanceSize, nil),
                 ("rules", .rules, settingsSize, firstRuleWithTestURL(model.config)),
                 ("rules-min", .rules, SettingsWindowController.minSize, firstRuleWithTestURL(model.config)),
                 ("rules-shadow", .rules, settingsSize, firstShadowedRule(model.config)),

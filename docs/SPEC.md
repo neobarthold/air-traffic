@@ -508,3 +508,67 @@ Problem-Hinweis (optional) · Status-Karte · „Wenn keine Regel passt“ · KI
 - Alle Stellen, die bisher zu „Allgemein“ springen, um dort Updates/Import/Safari zu zeigen, springen in den neuen Tab. Menüpunkte (z. B. „Nach Updates suchen …“) bleiben.
 - `--snapshot` erzeugt zusätzlich `safari-*` und `maintenance-*` (hell/dunkel) sowie Allgemein mit Darstellungs-Abschnitt; Snapshots setzen die Darstellung selbst und ignorieren `appearance` der Config.
 - README und `docs/images` (über `scripts/screenshots.sh`) auf den neuen Stand.
+
+## 24. Kommandozeile und MCP-Server für KI-Agenten (v1.8)
+
+Ziel: Ein KI-Agent (Claude Code, Codex …) oder ein Mensch im Terminal kann Regeln auslesen, prüfen, anlegen, ändern, umsortieren und löschen – mit derselben Logik wie die App. Ein Programm `airtraffic`, zwei Zugänge: Unterbefehle (CLI) und `airtraffic mcp` (MCP-Server über stdio).
+
+### 24.1 Programm und Einbettung
+- Neues XcodeGen-Target `airtraffic` (Kommandozeilen-Tool, Swift 6, strict concurrency), linkt `AirTrafficCore`; wird in `Air Traffic.app/Contents/Helpers/airtraffic` eingebettet. Abhängigkeit höchstens `swift-argument-parser` (exakte Version); MCP ohne SDK, eigene schlanke JSON-RPC-Schicht.
+- Die Logik (Befehle, Validierung, MCP-Dispatcher) liegt testbar im Core (z. B. `RuleEditing`, `AgentAPI`); das Target ist nur dünne Hülle (Argumente, stdin/stdout, Exit-Codes).
+- Respektiert `AIRTRAFFIC_CONFIG_PATH` (§ConfigStore). Schreibt nie in Schlüsselbund, setzt nie den Standardbrowser, öffnet keine Links, kein Netzwerk.
+- `release.sh`: Helper vor dem App-Bundle mit Developer ID, `--options runtime --timestamp` signieren; Prüfung wie bei der Erweiterung (gültig, TeamIdentifier).
+
+### 24.2 Datenformat
+- Regeln ein- und ausgeben im **selben JSON wie `config.json`** (`Rule` Codable), plus Feld `position` (1-basiert) in Ausgaben.
+- Eingaben akzeptieren zusätzlich Kurzformen für Ziel-Apps: `"action": {"type": "open", "app": "Google Chrome"}` bzw. `"app": "com.google.Chrome"` (Name, Bundle-ID oder Pfad) → wird zu `AppRef` aufgelöst (LaunchServices/NSWorkspace). `id` fehlt → neue UUID. Unbekannte Felder → Fehler mit Feldname.
+- `airtraffic schema` / MCP-Tool `describe_rule_format`: beschreibt das Format kompakt (Bedingungstypen, Operatoren, Match-Modi, Aktionen, Umschreibungen mit `$1`) mit 3 Beispielen (Host → App, Regex-Umschreibung, Quell-App → Auswahl).
+
+### 24.3 Befehle (CLI) = Tools (MCP)
+| CLI | MCP-Tool | Wirkung |
+|---|---|---|
+| `rules list [--json]` | `list_rules` | alle Regeln mit Position, aktiv, Kurzbeschreibung |
+| `rules get <ref>` | `get_rule` | eine Regel vollständig |
+| `rules add [--at n] [--dry-run]` (JSON über stdin oder Flags `--name --host --url-contains --regex --open <app> --prompt --rewrite <muster> <vorlage> --test-url`) | `create_rule` | anlegen (Standard: ans Ende) |
+| `rules update <ref> [--dry-run]` (JSON-Teilobjekt über stdin; Felder ersetzen, `conditions`/`rewrites` als ganze Liste) | `update_rule` | ändern |
+| `rules move <ref> --to n` | `move_rule` | umsortieren |
+| `rules enable/disable <ref>` | `set_rule_enabled` | an/aus |
+| `rules delete <ref> [--dry-run]` | `delete_rule` | löschen |
+| `check <url> [--source <bundleID>] [--modifiers …]` | `check_url` | wie §22: Entscheidung + Status je Regel |
+| `browsers list` | `list_browsers` | Browserliste + installierte Apps-Hinweis |
+| `settings` | `get_settings` | Standardaktion, Erweiterungs-Verhalten, Darstellung (nur lesen) |
+| `schema` | `describe_rule_format` | Format-Beschreibung |
+| `mcp` | – | MCP-Server starten |
+- `<ref>` = UUID, eindeutiges UUID-Präfix (≥ 6 Zeichen), Position (`#3`) oder exakter Name; mehrdeutig → Fehler mit Kandidaten.
+- Ausgabe: menschenlesbar, mit `--json` maschinenlesbar (MCP immer JSON). Fehler auf stderr, Exit-Code ≠ 0; `--dry-run` zeigt die Regel nach der Änderung und schreibt nichts.
+- Jede Schreiboperation antwortet mit der resultierenden Regel und einer kurzen `check`-Vorschau für ihre `testURL` (falls gesetzt).
+
+### 24.4 Validierung und Sicherheit
+- Vor dem Schreiben: Regex in Bedingungen/Umschreibungen kompilierbar, Ziel-App auflösbar (sonst Fehler; Warnung, wenn Pfad nicht existiert), Aktion gültig, Name nicht leer. Fehler nennen Feld und Grund.
+- **Sicherung:** vor jedem Schreiben Kopie nach `…/Air Traffic/backups/config-<ISO-Zeit>.json`, die letzten 30 bleiben.
+- **Gleichzeitiger Zugriff:** Lesen-Ändern-Schreiben unter `NSFileCoordinator` (Core-Funktion `ConfigStore.modify`), atomar. Die App nutzt beim Speichern ebenfalls Koordination.
+
+### 24.5 App erkennt externe Änderungen
+- Die App beobachtet `config.json` (NSFilePresenter oder Datei-/Ordner-Überwachung, robust gegen atomares Ersetzen) und lädt bei Änderung von außen neu; Auswahl im Regel-Tab bleibt, wenn die Regel noch existiert.
+- Die App merkt sich den Inhalt/Hash der zuletzt geladenen/gespeicherten Datei. Vor dem Speichern: Hat sich die Datei inzwischen extern geändert, wird **nicht** überschrieben, sondern neu geladen; Hinweis „Regeln wurden von außen geändert und neu geladen.“ (orange Zeile im Einstellungsfenster, verschwindet nach 6 s oder bei Klick). Eigene Speichervorgänge lösen kein Neuladen aus.
+- Tests: Hash-Logik/Konfliktentscheidung als reine Funktion im Core.
+
+### 24.6 MCP-Server
+- JSON-RPC 2.0 über stdin/stdout, eine Nachricht pro Zeile; Logs nur auf stderr. Unterstützt `initialize` (Protokollversion des Clients übernehmen, falls unterstützt; sonst `2025-06-18`), `notifications/initialized`, `ping`, `tools/list`, `tools/call`; unbekannte Methoden → Fehler `-32601`.
+- `serverInfo`: `air-traffic`, App-Version. `instructions`: 2–3 Sätze (erst `describe_rule_format` und `list_rules`, Änderungen mit `check_url` prüfen, oben gewinnt).
+- Jedes Tool mit `inputSchema` (JSON Schema) und kurzer Beschreibung; Ergebnis als `content` (Text-JSON) **und** `structuredContent`; Fachfehler als `isError: true` mit Text.
+- Schreibende Tools tragen `annotations` (`destructiveHint` bei delete, `readOnlyHint` bei Lese-Tools).
+
+### 24.7 Installation in der App
+Tab „Updates & Import“, neuer Abschnitt „Kommandozeile & KI-Agenten“ (`terminal`):
+- Status: „Installiert: ~/.local/bin/airtraffic“ (Pill grün) / „Nicht installiert“ / „Zeigt auf eine andere App-Kopie“ (orange, mit „Aktualisieren“).
+- Knopf „Installieren“ legt Symlink `~/.local/bin/airtraffic` → `<App>/Contents/Helpers/airtraffic` an (Ordner bei Bedarf anlegen, kein Admin); „Entfernen“ löscht nur diesen Symlink. Hinweis, falls `~/.local/bin` nicht im `PATH` der Login-Shell ist (mit Zeile zum Ergänzen in `~/.zshrc`).
+- Zwei kopierbare Befehle (mono, Knopf „Kopieren“): `claude mcp add --scope user air-traffic -- ~/.local/bin/airtraffic mcp` und `codex mcp add air-traffic -- ~/.local/bin/airtraffic mcp`.
+- Kurzer Hilfetext: was ein Agent damit kann, dass vor jeder Änderung eine Sicherung angelegt wird.
+
+### 24.8 Tests, Doku, Abnahme
+- Core-Tests: Ref-Auflösung (UUID, Präfix, #n, Name, mehrdeutig), add/update/move/delete/enable, Kurzform-Aktion, Validierungsfehler, Backups (Rotation), `modify` atomar, Konfliktentscheidung 24.5, MCP-Dispatcher (initialize, tools/list enthält alle Tools mit Schema, tools/call Erfolg und Fehler, unbekannte Methode).
+- Ende-zu-Ende-Skript-Test (manuell, im Bericht): CLI gegen eine Config-Kopie; `mcp` mit einer Folge von JSON-Zeilen über stdin.
+- README: Abschnitt „Kommandozeile & KI-Agenten“ mit Installation, Beispielen, MCP-Einbindung.
+- `--snapshot`: Tab „Updates & Import“ mit neuem Abschnitt.
+- Nicht-Ziele: Browserliste, Standardaktion, KI-Einstellungen per CLI ändern; Netzwerk-Transport (HTTP/SSE); Authentifizierung.

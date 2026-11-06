@@ -97,7 +97,9 @@ final class SettingsTabViewController: NSTabViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func add(_ view: some View, tab: SettingsTab) {
-        let root = view.frame(
+        let root = view
+            .safeAreaInset(edge: .top, spacing: 0) { ExternalChangeBanner(model: model) }
+            .frame(
             minWidth: SettingsWindowController.minSize.width,
             maxWidth: .infinity,
             minHeight: SettingsWindowController.minSize.height,
@@ -138,5 +140,30 @@ final class SettingsTabViewController: NSTabViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         updateTitle()
+    }
+}
+
+
+/// Orange Zeile oben im Einstellungsfenster, wenn die Regeln von außen geändert wurden (§24.5).
+/// Verschwindet nach 6 s oder bei Klick.
+struct ExternalChangeBanner: View {
+    let model: AppModel
+
+    var body: some View {
+        if model.showsExternalChangeNotice {
+            Button(action: model.dismissExternalChangeNotice) {
+                Label("Regeln wurden von außen geändert und neu geladen.", systemImage: "arrow.triangle.2.circlepath")
+                    .font(DS.help)
+                    .foregroundStyle(DS.orange)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DS.orange.opacity(DS.tint))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Klicken zum Ausblenden")
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 }

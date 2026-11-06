@@ -40,7 +40,8 @@ struct RulesSettingsView: View {
                         onShowRule: showRule,
                         checkURL: model.ruleCheckURL
                     )
-                    .id(model.config.rules[index].id)
+                    // Nach Neuladen von außen (§24.5) Editor-Zustand verwerfen.
+                    .id("\(model.config.rules[index].id)-\(model.externalReloadCount)")
                 } else {
                     Text("Regel auswählen oder anlegen.")
                         .foregroundStyle(.secondary)

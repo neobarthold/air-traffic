@@ -7,11 +7,15 @@ public struct ConfigStore: Sendable {
 
     public enum StoreError: Error, LocalizedError, Equatable {
         case unsupportedSchemaVersion(Int)
+        /// Schreibende Zugriffe von außen (§24) legen keine neue Konfiguration an.
+        case missing(path: String)
 
         public var errorDescription: String? {
             switch self {
             case .unsupportedSchemaVersion(let v):
                 "Konfiguration hat Schema-Version \(v), unterstützt wird \(Config.currentSchemaVersion)."
+            case .missing(let path):
+                "Keine Konfiguration unter \(path) – Air Traffic einmal starten, dann erneut versuchen."
             }
         }
     }

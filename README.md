@@ -26,6 +26,8 @@ Standardaktion – zum Beispiel ein kleines Auswahlfenster mit allen Browsern.
   - ChatGPT-Abo über die installierte Codex-CLI.
 - **Safari-Erweiterung:** schickt Links aus Safari per Rechtsklick oder Symbolleisten-Knopf an Air Traffic,
   auf Wunsch mit eigenem Verhalten (Regeln aus, eigene Aktion).
+- **Kommandozeile & KI-Agenten:** `airtraffic` liest, prüft und ändert Regeln im Terminal und
+  läuft als MCP-Server für Claude Code, Codex & Co. – mit Sicherung vor jeder Änderung.
 - **Choosy-Import:** übernimmt Regeln und Browserliste aus Choosy.
 - **Updates:** prüft täglich auf neue Versionen (Sparkle) und installiert sie automatisch –
   sobald weder Auswahlfenster noch Einstellungen offen sind.
@@ -85,6 +87,51 @@ Die Erweiterung braucht keinen Zugriff auf Webseiten: Sie liest nur den angeklic
 URL des aktiven Tabs und übergibt sie über das URL-Schema
 `airtraffic://open?url=<prozentkodiert>[&source=<bundleID>][&prompt=1]` an die App.
 
+## Kommandozeile & KI-Agenten
+
+Die App bringt das Programm `airtraffic` mit (`Air Traffic.app/Contents/Helpers/airtraffic`). Damit
+lassen sich Regeln im Terminal auflisten, prüfen, anlegen, ändern, umsortieren und löschen – mit
+derselben Logik wie die App. `airtraffic mcp` macht dasselbe als MCP-Server für KI-Agenten.
+
+**Installieren:** Einstellungen → Tab **Updates & Import** → „Kommandozeile & KI-Agenten“ →
+„Installieren“. Das legt den Symlink `~/.local/bin/airtraffic` an (kein Administrator nötig);
+„Entfernen“ löscht nur diesen Symlink. Fehlt `~/.local/bin` im `PATH`, zeigt die App die Zeile für
+`~/.zshrc`: `export PATH="$HOME/.local/bin:$PATH"`.
+
+**Beispiele:**
+
+```sh
+airtraffic rules list                                   # alle Regeln, oben gewinnt
+airtraffic check "https://github.com/acme/webshop/pull/42" --source com.tinyspeck.slackmacgap
+airtraffic rules add --name "Figma in der App" --host www.figma.com --open Figma \
+  --test-url "https://www.figma.com/file/abc"
+airtraffic rules add --at 1 < regel.json                # Regel als JSON (Format: airtraffic schema)
+echo '{"enabled": false}' | airtraffic rules update "#3" --dry-run
+airtraffic rules move "Figma in der App" --to 2
+airtraffic rules delete 3f2a9c1e                        # UUID-Präfix ab 6 Zeichen
+```
+
+- `<ref>` ist eine UUID, ein eindeutiges UUID-Präfix (ab 6 Zeichen), eine Position (`#3`) oder der exakte Name.
+- Regeln ein und aus im selben JSON wie `config.json`; Ziel-Apps auch kurz als Name, Bundle-ID oder Pfad
+  (`"action": {"type": "open", "app": "Google Chrome"}`). `airtraffic schema` beschreibt das Format mit Beispielen.
+- `--json` gibt alles maschinenlesbar aus, `--dry-run` zeigt eine Änderung, ohne zu schreiben.
+  Jede Änderung antwortet mit der Regel und einer Prüfung ihrer Test-URL.
+- Vor jedem Schreiben legt `airtraffic` eine Sicherung unter `~/Library/Application Support/Air Traffic/backups/`
+  an (die letzten 30 bleiben). Ändern läuft koordiniert und atomar; die laufende App lädt die Regeln sofort neu.
+- Browserliste, Standardaktion und KI-Einstellungen lassen sich nur lesen (`airtraffic browsers list`,
+  `airtraffic settings`), nicht ändern.
+
+**Als MCP-Server einbinden** (stdio, JSON-RPC 2.0):
+
+```sh
+claude mcp add --scope user air-traffic -- ~/.local/bin/airtraffic mcp
+codex mcp add air-traffic -- ~/.local/bin/airtraffic mcp
+```
+
+Tools: `describe_rule_format`, `list_rules`, `get_rule`, `create_rule`, `update_rule`, `move_rule`,
+`set_rule_enabled`, `delete_rule`, `check_url`, `list_browsers`, `get_settings`. Der Server arbeitet nur
+lokal mit der Konfigurationsdatei: kein Netzwerk, kein Schlüsselbund, er öffnet keine Links.
+
 ## Bauen aus dem Quellcode
 
 Benötigt Xcode 27 und [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
@@ -104,8 +151,11 @@ Aufbau:
 - `App/` – AppKit-App mit SwiftUI-Ansichten (Auswahlfenster, Einstellungen, Updates).
 - `SafariExtension/` – Safari-Web-Extension (Manifest V3, `background.js`) und
   `SafariWebExtensionHandler`; wird als `Contents/PlugIns/SafariExtension.appex` eingebettet.
-- `Packages/AirTrafficCore/` – Regeln, Umschreiben, Konfiguration, Choosy-Import, KI-Assistent;
-  nur Foundation, vollständig getestet.
+- `CLI/` – dünne Hülle des Kommandozeilen-Tools `airtraffic` (Target `AirTrafficCLI`); die Befehle,
+  die Validierung und der MCP-Server liegen im Core. Wird als `Contents/Helpers/airtraffic` eingebettet.
+- `Packages/AirTrafficCore/` – Regeln, Umschreiben, Konfiguration, Choosy-Import, KI-Assistent,
+  Agenten-Schnittstelle (Kommandozeile, MCP);
+  nur Foundation und CryptoKit (kein AppKit), vollständig getestet.
 - `docs/SPEC.md` – Spezifikation.
 
 **Safari-Erweiterung beim Entwickeln:** Debug-Builds sind nur ad hoc signiert. Safari lädt die
@@ -156,7 +206,8 @@ scripts/release.sh 1.4 --dry-run --no-sign     # nur bauen
 ```
 
 Das Skript setzt `MARKETING_VERSION` und `CURRENT_PROJECT_VERSION` (Build + 1) in `project.yml`, baut
-die Release-Version, signiert sie mit Developer ID (Safari-Erweiterung zuerst, mit ihren Sandbox-Entitlements)
+die Release-Version, signiert sie mit Developer ID (Safari-Erweiterung zuerst, mit ihren Sandbox-Entitlements,
+dann das Kommandozeilen-Tool, beide mit Hardened Runtime)
 und lässt sie notarisieren, packt `build/dist/Air-Traffic-<version>.zip`, signiert es mit Sparkles
 `sign_update` (EdDSA-Schlüssel im Schlüsselbund, Account `air-traffic`; die Werkzeuge lädt es bei Bedarf
 nach `build/sparkle-tools`), ergänzt `appcast.xml` und legt das GitHub-Release `v<version>` mit dem ZIP
