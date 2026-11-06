@@ -6,6 +6,23 @@
     <description>Updates für Air Traffic</description>
     <language>de</language>
     <item>
+      <title>Version 1.8</title>
+      <pubDate>Fri, 06 Nov 2026 09:21:04 +0000</pubDate>
+      <sparkle:version>6</sparkle:version>
+      <sparkle:shortVersionString>1.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Neu: URL prüfen – eine URL ins Suchfeld der Regel-Liste einfügen und sehen, welche Regel greift, welche verdeckt ist und woran die übrigen scheitern.</li>
+<li>Neu: Kommandozeile und MCP-Server (Tab „CLI &amp; MCP“): KI-Agenten wie Claude Code oder Codex können Regeln lesen, prüfen, anlegen und ändern – mit Sicherung vor jeder Änderung. Die App übernimmt Änderungen von außen sofort.</li>
+<li>Neu: Darstellung wählbar (System, Hell, Dunkel) unter Allgemein.</li>
+<li>Einstellungen neu geordnet: eigene Tabs „Safari“, „CLI &amp; MCP“ und „Updates“; Choosy-Import unten in Allgemein.</li>
+<li>Safari-Status: verständliche Meldung, wenn Safari die Erweiterung nicht findet.</li>
+</ul>
+      ]]></description>
+      <enclosure url="https://github.com/neobarthold/air-traffic/releases/download/v1.8/Air-Traffic-1.8.zip" length="7127107" type="application/octet-stream" sparkle:edSignature="gYdlSWoNaAowqmPFl7f8OoqeKkNxD7QdmdOkNsMyCBDusaqUl7kdV3MJfJLSmiA/mjCtb+AAP/ABLZgrtw/1Bg=="/>
+    </item>
+    <item>
       <title>Version 1.7</title>
       <pubDate>Thu, 05 Nov 2026 23:45:28 +0000</pubDate>
       <sparkle:version>5</sparkle:version>
