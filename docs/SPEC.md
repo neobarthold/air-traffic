@@ -434,3 +434,77 @@ Problem: Ist Safari (oder ein anderer Browser) im Vollbild, erscheint das Auswah
 - Nach dem Öffnen eines Browsers: Fokus geht an den Ziel-Browser; bei Abbruch (esc) zurück an die vorherige App, ohne Space-Wechsel.
 - Gilt für alle Wege ins Auswahlfenster (Standardbrowser-Links, Erweiterung).
 - Verifikation: Testfenster einer Hilfs-App (z. B. ein per Skript gestartetes Vollbild-Fenster) ist optional; mindestens per Code-Review und Log, dass Panel-Space = aktiver Space. Der Nutzer testet mit Safari im Vollbild.
+
+## 22. URL prüfen: welche Regeln greifen? (v1.8)
+
+Ziel: Im Tab „Regeln“ eine beliebige URL eingeben und sofort sehen, welche Regeln für sie zutreffen, welche davon bei einem echten Klick greift und was dann passiert. Ergänzt den Test je Regel (§14): der beantwortet „trifft diese Regel?“, §22 beantwortet „was passiert mit dieser URL?“ und „warum greift meine Regel nicht?“.
+
+### 22.1 Einstieg: Suchfeld der Regel-Liste
+- Platzhalter wird „Regeln durchsuchen oder URL prüfen“.
+- Ist der (getrimmte) Inhalt eine vollständige URL, schaltet die Seitenleiste in den **Prüfmodus**; sonst bleibt es die Textsuche aus §13.2. Erkennung (Core, `RuleCheck.url(from:)`): keine Leerzeichen, `URL(string:)` gültig, Schema vorhanden und entweder `http`/`https` mit Host, `file`, oder beliebiges Schema mit `://` und Host. Ohne Schema (z. B. `github.com/acme`) bleibt es Textsuche.
+- Im Prüfmodus unter dem Suchfeld ein Umschalter „Als Text suchen“ (Textknopf). Er erzwingt für diesen Inhalt die Textsuche, bis sich der Inhalt ändert; dann steht dort „Als URL prüfen“.
+- esc/Leeren verlässt den Modus wie bisher.
+
+### 22.2 Ergebniskarte (Seitenleiste, unter dem Suchfeld)
+Kompakte Karte (Radius 8, getönte Fläche), immer vollständig sichtbar, Text umbrechend:
+- **Regel greift:** Pill ✓ „Regel n greift“ · Name halbfett · darunter „öffnet ‹Ergebnis-URL mono, auswählbar› in ‹App›“ bzw. Aktion in Worten (wie Testleiste §15.4). URL nur zeigen, wenn sie sich durch Umschreibungen ändert; sonst „öffnet in ‹App›“.
+- **Keine Regel greift:** Pill neutral „Keine Regel greift“ · „Standardaktion: ‹Aktion in Worten›“.
+- Engine-Warnungen (ungültige Regex, ungültige Ergebnis-URL) als rote Zeilen.
+- Rechts im Kopf Knopf „Simulieren …“ (gleiches Popover wie §15.4: Quell-App, Modifier; Punkt bei aktiver Simulation). Die Simulation gilt für die Prüfung und für den Editor (22.4), solange der Prüfmodus aktiv ist; beim Verlassen zurücksetzen.
+- Zeile darunter: „x von y Regeln treffen“ + Umschalter „Nur Treffer“ / „Alle Regeln“ (Standard: Nur Treffer).
+- Fußnote (11, sekundär) nur, wenn `extensionSettings` vom Standard abweicht: „Links aus der Safari-Erweiterung verhalten sich anders (Allgemein → Safari-Erweiterung).“
+
+### 22.3 Liste im Prüfmodus
+- Reihenfolge = Gesamtreihenfolge (oben gewinnt), Positionsnummer bleibt. Sortieren aus (wie beim Filtern), Fußleiste „Sortieren nur ohne Prüfung“.
+- **Nur Treffer:** alle Regeln, deren Bedingungen passen (auch deaktivierte). **Alle Regeln:** zusätzlich nicht passende.
+- Je Zeile statt der Chips eine Status-Zeile (Symbol + Text, nie nur Farbe):
+  - erste aktivierte passende Regel: grün ✓ „greift“ (bei Umschreibung: „greift · schreibt um“);
+  - weitere aktivierte passende: orange „trifft, aber Regel n greift zuerst“;
+  - deaktivierte passende: umrandet „Aus – würde treffen“;
+  - nicht passend (nur bei „Alle Regeln“): grau ✗ „trifft nicht · Bedingung n (Feld)“ (bei MatchMode ≠ alle nur „trifft nicht“); Name `.secondary`.
+- Leer bei „Nur Treffer“: „Keine Regel trifft. Mit „Alle Regeln“ siehst du, woran es scheitert.“
+- Auswahl, Aktiv-Checkbox, +/−/Duplizieren wie bisher. „+“ legt eine neue Regel an, deren Test-URL die geprüfte URL ist und deren erste Bedingung „Host ist ‹host›“ lautet (nur im Prüfmodus); der Prüfmodus bleibt, die neue Regel muss sichtbar sein (Ansicht schaltet bei Bedarf auf „Alle Regeln“).
+
+### 22.4 Editor im Prüfmodus
+- Die Testleiste des ausgewählten Editors verwendet die **geprüfte URL** und die Simulation aus 22.2 statt der gespeicherten Test-URL. Das Feld zeigt die geprüfte URL, nicht editierbar, mit Pill „aus URL-Prüfung“. Damit zeigen ✓/✗ je Bedingung, Pipeline-Knoten, Zwischenschritte und Vorrang-Warnung, warum die Regel (nicht) greift.
+- Knopf „Als Test-URL speichern“ setzt `rule.testURL` auf die geprüfte URL (deaktiviert, wenn gleich).
+- Die gespeicherte Test-URL wird nicht verändert; nach Verlassen des Prüfmodus zeigt die Testleiste wieder sie.
+- „Regel n zeigen“ in der Vorrang-Warnung wählt die Regel im Prüfmodus aus (sie ist als Treffer sichtbar).
+
+### 22.5 Core
+- `RuleCheck.url(from: String) -> URL?` (Erkennung aus 22.1).
+- `RuleEngine.check(url:context:config:) -> RuleCheckResult` (rein): `decision: Decision` (identisch zu `decide`), `entries: [RuleCheckEntry]` für **alle** Regeln in Config-Reihenfolge mit `ruleID`, `position` (1-basiert), `matches`, `firstFailedCondition: Int?` (nur MatchMode alle), `status`: `.wins`, `.shadowed(by: UUID)`, `.disabledMatch`, `.noMatch`; `matchCount`.
+- Tests: Erkennung (http/https/file/eigenes Schema/ohne Schema/Leerzeichen/leer), greift/verdeckt/deaktiviert/kein Treffer, Kette mit Umschreibung, `decision` == `decide`, Simulation (Quell-App, Modifier), firstFailedCondition, leere Bedingungen = immer.
+
+### 22.6 Snapshot und Abnahme
+- `--snapshot` zusätzlich: Regeln im Prüfmodus (URL aus der Demo-Config, die eine Regel trifft und eine zweite verdeckt), hell und dunkel, einmal „Nur Treffer“ mit ausgewähltem Gewinner, einmal „Alle Regeln“ bei Mindestgröße.
+- Seitenleiste der Regeln 320 pt breit (statt 272), Suchfeld mit vollem Platzhalter „Regeln durchsuchen oder URL prüfen“ und Keycap `⌘F`; Mindestgröße Inhalt dafür 870 × 560 (statt 820 × 560), damit der Editor nicht schmaler wird.
+- Build ohne Warnungen, alle Tests grün; bestehende Textsuche (§13.2) und Test je Regel (§14) unverändert.
+- Nicht-Ziele: Verlauf echter Klicks, Prüfung über die Menüleiste, Simulation der Safari-Erweiterung als Quelle.
+
+## 23. Darstellung wählbar, neue Tabs „Safari“ und „Updates & Import“ (v1.8)
+
+### 23.1 Darstellung (Hell/Dunkel)
+- Alle Fenster (Einstellungen, Auswahlfenster, Sheets, Popover, Alerts) unterstützen Hell und Dunkel; Farben nur über Asset-Farben bzw. semantische Systemfarben (§15.1). Fehlende Dunkel-Varianten ergänzen.
+- Config (Core, optional, abwärtskompatibel): `appearance: AppAppearance?` mit `system` (Standard, auch bei nil), `light`, `dark`. nil wird nicht geschrieben; `system` wird als nil gespeichert.
+- Anwendung: `NSApp.appearance = nil / .aqua / .darkAqua` beim Start und sofort bei jeder Änderung (auch nach externem Neuladen der Config). Gilt für alle Fenster der App, auch das Auswahlfenster.
+- Einstellungen → Allgemein, neuer Abschnitt „Darstellung“ (`circle.lefthalf.filled`): segmentierter Picker „System“ / „Hell“ / „Dunkel“, Hilfetext „System folgt der Einstellung in macOS.“
+- Tests: Config-Roundtrip mit/ohne `appearance`, alte Config ohne Feld lädt als `system`.
+
+### 23.2 Tab „Safari“
+- Neuer Toolbar-Tab „Safari“ (SF Symbol `safari`) mit dem kompletten bisherigen Abschnitt „Safari-Erweiterung“ (§20/§21: Status, „In Safari aktivieren …“, „Regeln anwenden“, Fallback-Aktion, Hilfetexte). Aus „Allgemein“ entfernen.
+- Layout wie Allgemein (zentriert, max. 600 pt, scrollt), oben ein kurzer Einleitungssatz, was die Erweiterung tut (Kontextmenü „Mit Air Traffic öffnen“ / „… auswählen …“, Symbolleisten-Knopf).
+- Fußnote der URL-Prüfung (§22.2) verweist auf „Safari“ statt „Allgemein → Safari-Erweiterung“.
+
+### 23.3 Tab „Updates & Import“
+- Neuer Toolbar-Tab „Updates & Import“ (SF Symbol `arrow.triangle.2.circlepath`) mit den bisherigen Abschnitten „Updates“ (§17) und „Import & Konfiguration“ (Choosy-Import, Datei-Pfad + „Im Finder zeigen“, „Air Traffic beenden“). Aus „Allgemein“ entfernen.
+- Layout wie Allgemein.
+
+### 23.4 Allgemein danach
+Problem-Hinweis (optional) · Status-Karte · „Wenn keine Regel passt“ · KI-Assistent · Darstellung.
+
+### 23.5 Reihenfolge und Navigation
+- Tabs: Allgemein · Browser · Regeln · Safari · Updates & Import. `SettingsTab` um `safari`, `maintenance` erweitern; Fenstertitel = Tab-Name; Frame-Autosave bleibt.
+- Alle Stellen, die bisher zu „Allgemein“ springen, um dort Updates/Import/Safari zu zeigen, springen in den neuen Tab. Menüpunkte (z. B. „Nach Updates suchen …“) bleiben.
+- `--snapshot` erzeugt zusätzlich `safari-*` und `maintenance-*` (hell/dunkel) sowie Allgemein mit Darstellungs-Abschnitt; Snapshots setzen die Darstellung selbst und ignorieren `appearance` der Config.
+- README und `docs/images` (über `scripts/screenshots.sh`) auf den neuen Stand.

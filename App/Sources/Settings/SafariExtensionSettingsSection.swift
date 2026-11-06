@@ -3,7 +3,7 @@ import AppKit
 import SafariServices
 import SwiftUI
 
-/// Einstellungen → Allgemein → „Safari-Erweiterung“ (SPEC §20.3, §21.2).
+/// Einstellungen → „Safari“ → „Safari-Erweiterung“ (SPEC §20.3, §21.2, §23.2).
 struct SafariExtensionSettingsSection: View {
     static let extensionIdentifier = "de.neoskop.AirTraffic.SafariExtension"
 
@@ -20,16 +20,6 @@ struct SafariExtensionSettingsSection: View {
         VStack(alignment: .leading, spacing: 6) {
             SectionHeader(symbol: "safari", title: "Safari-Erweiterung")
             GroupCard {
-                Text(
-                    "Links, die du in Safari anklickst, gehen nicht über den Standardbrowser. Mit der Erweiterung schickst du sie per Rechtsklick oder Symbolleisten-Knopf an Air Traffic – dann greifen deine Regeln."
-                )
-                .font(DS.help)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                Divider().padding(.leading, 12)
                 if let error {
                     Text(error)
                         .font(DS.help)
@@ -160,5 +150,29 @@ struct SafariExtensionSettingsSection: View {
                 self.error = "Safari-Einstellungen ließen sich nicht öffnen: \(error.localizedDescription)"
             }
         }
+    }
+}
+
+/// Einstellungen → „Safari“ (§23.2): Einleitung und Abschnitt „Safari-Erweiterung“.
+struct SafariSettingsView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        SettingsPage {
+            PageHeaderCard(
+                icon: Self.safariIcon,
+                title: "Links aus Safari an Air Traffic schicken",
+                detail: "Links, die du in Safari anklickst, gehen nicht über den Standardbrowser. Die Erweiterung schickt sie an Air Traffic: per Rechtsklick mit „Mit Air Traffic öffnen“ oder „Mit Air Traffic auswählen …“ und über ihren Knopf in der Symbolleiste."
+            )
+            SafariExtensionSettingsSection(model: model)
+        }
+    }
+
+    /// Safari-Symbol; fehlt Safari (z. B. in einer VM), das Kompass-Symbol.
+    private static var safariIcon: NSImage {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") {
+            return NSWorkspace.shared.icon(forFile: url.path(percentEncoded: false))
+        }
+        return NSImage(systemSymbolName: "safari", accessibilityDescription: nil) ?? NSApp.applicationIconImage
     }
 }

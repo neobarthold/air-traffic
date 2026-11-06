@@ -9,7 +9,7 @@ enum SnapshotCommand {
     static let flag = "--snapshot"
 
     private static let settingsSize = NSSize(width: 980, height: 720)
-    private static let fullPageSize = NSSize(width: 980, height: 1180)
+    private static let fullPageSize = NSSize(width: 980, height: 800)
 
     static func run(arguments: [String]) async -> Int32 {
         guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else {
@@ -25,6 +25,9 @@ enum SnapshotCommand {
         }
 
         let model = AppModel(store: .makeDefault(), keyStore: SnapshotKeyStore(), persists: false)
+        // Darstellung setzt der Snapshot selbst (§23.5); `appliesAppearance` bleibt aus, und der
+        // Picker in „Allgemein“ zeigt den Standard „System“ statt der Darstellung aus der Config.
+        model.config.appearance = nil
         // Liest nur die Update-Einstellungen, prüft nichts.
         model.updates = UpdateController(startingUpdater: false)
         var written: [String] = []
@@ -44,6 +47,8 @@ enum SnapshotCommand {
             let jobs: [(String, SettingsTab, NSSize, UUID?)] = [
                 ("general", .general, settingsSize, nil),
                 ("browsers", .browsers, settingsSize, nil),
+                ("safari", .safari, settingsSize, nil),
+                ("maintenance", .maintenance, settingsSize, nil),
                 ("rules", .rules, settingsSize, firstRuleWithTestURL(model.config)),
                 ("rules-min", .rules, SettingsWindowController.minSize, firstRuleWithTestURL(model.config)),
                 ("rules-shadow", .rules, settingsSize, firstShadowedRule(model.config)),
@@ -58,17 +63,30 @@ enum SnapshotCommand {
                 if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
             }
 
-            // Ganze Seite „Allgemein“ mit allen Abschnitten, je einmal pro Anbieter-Art (§16.3, §17).
-            // Safari-Erweiterung (§21.2): erst Standard, dann Regeln aus mit eigener Aktion.
+            // URL-Prüfung (§22.6): URL mit Gewinner und verdeckter Regel; „Nur Treffer“ mit
+            // ausgewähltem Gewinner, „Alle Regeln“ mit ausgewählter verdeckter Regel bei Mindestgröße.
+            if let check = checkExample(model.config) {
+                for (name, showsAll, size, ruleID) in [
+                    ("rules-check", false, settingsSize, check.winner),
+                    ("rules-check-all", true, SettingsWindowController.minSize, check.shadowed),
+                ] {
+                    model.ruleQuery = check.url.absoluteString
+                    model.ruleCheckShowsAll = showsAll
+                    model.selectedRuleID = ruleID
+                    model.settingsTab = .rules
+                    window.setContentSize(size)
+                    await settle(window)
+                    let file = dir.appending(path: "\(name)-\(suffix).png")
+                    if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
+                }
+                model.ruleQuery = ""
+            }
+
+            // Ganze Seite „Allgemein“ mit allen Abschnitten inkl. „Darstellung“, je einmal pro
+            // Anbieter-Art (§16.3, §23.4).
             let savedAssistant = model.config.assistant
-            let savedExtension = model.config.extensionSettings
-            let ownExtension = ExtensionSettings(applyRules: false, fallbackAction: .prompt(.running))
-            for (name, provider, extensionSettings) in [
-                ("general-full", AssistantProvider.openRouter, savedExtension),
-                ("general-claude", .claudeCLI, ownExtension),
-            ] {
+            for (name, provider) in [("general-full", AssistantProvider.openRouter), ("general-claude", .claudeCLI)] {
                 model.updateAssistant { $0.provider = provider }
-                model.config.extensionSettings = extensionSettings
                 if let cli = provider.cli { await model.refreshCLIStatus(cli) }
                 model.settingsTab = .general
                 window.setContentSize(fullPageSize)
@@ -77,6 +95,15 @@ enum SnapshotCommand {
                 if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
             }
             model.config.assistant = savedAssistant
+
+            // Tab „Safari“ (§21.2, §23.2): Regeln aus mit eigener Aktion (Standard zeigt `safari-*`).
+            let savedExtension = model.config.extensionSettings
+            model.config.extensionSettings = ExtensionSettings(applyRules: false, fallbackAction: .prompt(.running))
+            model.settingsTab = .safari
+            window.setContentSize(settingsSize)
+            await settle(window)
+            let ownFile = dir.appending(path: "safari-own-\(suffix).png")
+            if writePNG(of: window, to: ownFile) { written.append(ownFile.lastPathComponent) }
             model.config.extensionSettings = savedExtension
             window.orderOut(nil)
 
@@ -101,6 +128,19 @@ enum SnapshotCommand {
             guard let url = testURL(of: rule) else { return false }
             return RuleEngine.test(rule: rule, url: url, context: LinkContext(), config: config).shadowedBy != nil
         }?.id
+    }
+
+    /// Erste Test-URL der Config, für die eine Regel greift und eine zweite verdeckt ist (§22.6).
+    private static func checkExample(_ config: Config) -> (url: URL, winner: UUID, shadowed: UUID)? {
+        for rule in config.rules {
+            guard let url = testURL(of: rule) else { continue }
+            let result = RuleEngine.check(url: url, context: LinkContext(), config: config)
+            guard let winner = result.decision.matchedRuleID,
+                  let shadowed = result.entries.first(where: { $0.status == .shadowed(by: winner) })
+            else { continue }
+            return (url, winner, shadowed.ruleID)
+        }
+        return nil
     }
 
     private static func testURL(of rule: Rule) -> URL? {

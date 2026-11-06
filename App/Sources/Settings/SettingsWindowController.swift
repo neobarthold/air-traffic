@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Kleinste Inhaltsgröße (ohne Toolbar), bei der Regel-Liste und Editor nicht abgeschnitten werden.
-    static let minSize = NSSize(width: 820, height: 560)
+    static let minSize = NSSize(width: 870, height: 560)
 
     private let model: AppModel
     let tabs: SettingsTabViewController
@@ -72,7 +72,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class SettingsTabViewController: NSTabViewController {
     private let model: AppModel
-    private static let order: [SettingsTab] = [.general, .browsers, .rules]
+    private static let order = SettingsTab.allCases
 
     init(model: AppModel) {
         self.model = model
@@ -82,16 +82,21 @@ final class SettingsTabViewController: NSTabViewController {
         transitionOptions = []
         canPropagateSelectedChildViewControllerTitle = false
 
-        add(GeneralSettingsView(model: model), label: "Allgemein", symbol: "gearshape")
-        add(BrowsersSettingsView(model: model), label: "Browser", symbol: "globe")
-        add(RulesSettingsView(model: model), label: "Regeln",
-            symbol: "point.topleft.down.to.point.bottomright.curvepath")
+        for tab in Self.order {
+            switch tab {
+            case .general: add(GeneralSettingsView(model: model), tab: tab)
+            case .browsers: add(BrowsersSettingsView(model: model), tab: tab)
+            case .rules: add(RulesSettingsView(model: model), tab: tab)
+            case .safari: add(SafariSettingsView(model: model), tab: tab)
+            case .maintenance: add(MaintenanceSettingsView(model: model), tab: tab)
+            }
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    private func add(_ view: some View, label: String, symbol: String) {
+    private func add(_ view: some View, tab: SettingsTab) {
         let root = view.frame(
             minWidth: SettingsWindowController.minSize.width,
             maxWidth: .infinity,
@@ -101,8 +106,8 @@ final class SettingsTabViewController: NSTabViewController {
         let hosting = NSHostingController(rootView: root)
         hosting.sizingOptions = []
         let item = NSTabViewItem(viewController: hosting)
-        item.label = label
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        item.label = tab.label
+        item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: tab.label)
         addTabViewItem(item)
     }
 

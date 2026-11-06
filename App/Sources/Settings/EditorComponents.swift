@@ -14,6 +14,29 @@ enum ActionText {
         case .prompt(.running): "Auswahl zeigen (laufende)"
         }
     }
+
+    /// Aktion in Worten für Testleiste (§15.4) und URL-Prüfung (§22.2):
+    /// „öffnet ‹URL› in ‹App›“; ohne `url` nur „öffnet in ‹App›“.
+    static func opens(_ action: Action, url: URL?, hypothetical: Bool = false) -> Text {
+        let verb = hypothetical ? "würde öffnen" : "öffnet"
+        let urlText = url.map { Text($0.absoluteString).font(DS.monoSmall).foregroundStyle(.primary) }
+        switch action {
+        case .open(let app):
+            let appText = Text(app.displayName).fontWeight(.semibold).foregroundStyle(.primary)
+            if let urlText { return Text("\(verb) \(urlText) in \(appText)") }
+            return Text("\(verb) in \(appText)")
+        case .openFirstRunning(let fallback):
+            let rest = fallback.map { ", sonst in \($0.displayName)" } ?? ""
+            if let urlText { return Text("\(verb) \(urlText) im ersten laufenden Browser\(rest)") }
+            return Text("\(verb) im ersten laufenden Browser\(rest)")
+        case .prompt(let scope):
+            let which = scope == .all ? "alle Browser" : "laufende Browser"
+            if let urlText {
+                return Text("\(hypothetical ? "würde" : "zeigt") \(urlText) im Auswahlfenster\(hypothetical ? " zeigen" : "") (\(which))")
+            }
+            return Text("\(hypothetical ? "würde die Auswahl zeigen" : "zeigt die Auswahl") (\(which))")
+        }
+    }
 }
 
 enum RuleText {
@@ -310,5 +333,58 @@ struct ModifierToggles: View {
         ))
         .toggleStyle(.button)
         .help(help)
+    }
+}
+
+// MARK: - Simulation
+
+/// „Simulieren …“ mit Popover (§15.4): Quell-App und Modifier; Punkt bei aktiver Simulation.
+/// Genutzt von der Testleiste und der URL-Prüfung (§22.2).
+struct SimulationButton: View {
+    @Binding var source: String
+    @Binding var modifiers: ModifierSet
+    /// Nur Symbol (enge Seitenleiste).
+    var compact = false
+    @State private var isPresented = false
+
+    private var active: Bool {
+        !source.trimmingCharacters(in: .whitespaces).isEmpty || !modifiers.isEmpty
+    }
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            if compact {
+                Image(systemName: "slider.horizontal.3")
+            } else {
+                Label("Simulieren …", systemImage: "slider.horizontal.3")
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if active {
+                Circle().fill(Color.accentColor).frame(width: 7, height: 7).offset(x: 2, y: -2)
+                    .accessibilityHidden(true)
+            }
+        }
+        .help("Quell-App und Modifier simulieren")
+        .accessibilityLabel("Simulieren")
+        .accessibilityValue(active ? "Simulation aktiv" : "")
+        .popover(isPresented: $isPresented, arrowEdge: .top) { popover }
+    }
+
+    private var popover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Weitere Bedingungen simulieren").font(DS.cardTitle)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                GridRow {
+                    Text("Quell-App").font(DS.body)
+                    SourceAppField(bundleIdentifier: $source).frame(width: 300)
+                }
+                GridRow {
+                    Text("Modifier").font(DS.body)
+                    ModifierToggles(modifiers: $modifiers)
+                }
+            }
+        }
+        .padding(14)
     }
 }

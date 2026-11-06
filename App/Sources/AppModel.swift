@@ -1,9 +1,30 @@
 import AirTrafficCore
-import Foundation
+import AppKit
 import Observation
 
-enum SettingsTab: Hashable {
-    case general, browsers, rules
+/// Tabs des Einstellungsfensters in Toolbar-Reihenfolge (§23.5).
+enum SettingsTab: Hashable, CaseIterable {
+    case general, browsers, rules, safari, maintenance
+
+    var label: String {
+        switch self {
+        case .general: "Allgemein"
+        case .browsers: "Browser"
+        case .rules: "Regeln"
+        case .safari: "Safari"
+        case .maintenance: "Updates & Import"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .browsers: "globe"
+        case .rules: "point.topleft.down.to.point.bottomright.curvepath"
+        case .safari: "safari"
+        case .maintenance: "arrow.triangle.2.circlepath"
+        }
+    }
 }
 
 /// Hält die Konfiguration und speichert Änderungen debounced (300 ms).
@@ -15,20 +36,67 @@ final class AppModel {
     var config: Config {
         didSet {
             if config != oldValue { scheduleSave() }
+            if config.appearance != oldValue.appearance { applyAppearanceIfEnabled() }
         }
     }
 
     /// Letzter Lade-/Speicherfehler für die Anzeige in den Einstellungen.
     var problem: String?
 
-    /// Ausgewählter Tab im Einstellungsfenster (Sprung zu „Allgemein“ aus dem Regel-Editor).
+    /// Ausgewählter Tab im Einstellungsfenster (z. B. Sprung zu „Allgemein“ aus dem Regel-Editor).
     var settingsTab: SettingsTab = .general
 
     /// Ausgewählte Regel im Tab „Regeln“ (bleibt beim Tab-Wechsel erhalten).
     var selectedRuleID: UUID?
 
+    // MARK: Suche und URL-Prüfung der Regel-Liste (§13.2, §22)
+
+    /// Inhalt des Suchfelds im Tab „Regeln“: Text oder zu prüfende URL.
+    var ruleQuery = "" {
+        didSet {
+            // „Als Text suchen“ gilt nur für den Inhalt, für den es gewählt wurde (§22.1).
+            if ruleQueryForcedText != nil, ruleQueryForcedText != ruleQuery { ruleQueryForcedText = nil }
+            resetRuleCheckIfInactive()
+        }
+    }
+
+    /// Inhalt, für den „Als Text suchen“ gewählt wurde; nil = automatische Erkennung.
+    var ruleQueryForcedText: String? {
+        didSet { resetRuleCheckIfInactive() }
+    }
+
+    /// Prüfmodus: „Alle Regeln“ statt „Nur Treffer“ (§22.2).
+    var ruleCheckShowsAll = false
+    /// Simulation im Prüfmodus (Quell-App, Modifier); gilt für Liste und Editor (§22.2, §22.4).
+    var ruleCheckSource = ""
+    var ruleCheckModifiers: ModifierSet = []
+
+    /// Geprüfte URL, wenn das Suchfeld eine vollständige URL enthält und nicht als Text erzwungen ist.
+    var ruleCheckURL: URL? {
+        ruleQueryForcedText == ruleQuery ? nil : RuleCheck.url(from: ruleQuery)
+    }
+
+    var ruleCheckContext: LinkContext {
+        let id = ruleCheckSource.trimmingCharacters(in: .whitespaces)
+        return LinkContext(sourceBundleIdentifier: id.isEmpty ? nil : id, modifiers: ruleCheckModifiers)
+    }
+
+    /// Verlassen des Prüfmodus setzt Ansicht und Simulation zurück (§22.2).
+    private func resetRuleCheckIfInactive() {
+        guard ruleCheckURL == nil else { return }
+        if ruleCheckShowsAll { ruleCheckShowsAll = false }
+        if !ruleCheckSource.isEmpty { ruleCheckSource = "" }
+        if !ruleCheckModifiers.isEmpty { ruleCheckModifiers = [] }
+    }
+
     /// `false` = nichts speichern (`--snapshot`); die Konfiguration bleibt unangetastet.
     @ObservationIgnored let persists: Bool
+
+    /// `true` = `config.appearance` steuert `NSApp.appearance` (§23.1). Aus in `--snapshot`,
+    /// das die Darstellung selbst setzt.
+    @ObservationIgnored var appliesAppearance = false {
+        didSet { applyAppearanceIfEnabled() }
+    }
 
     /// Schlüsselbund-Ablage des OpenRouter-Keys (§12.1).
     @ObservationIgnored let keyStore: any APIKeyStore
@@ -122,6 +190,24 @@ final class AppModel {
         } catch {
             problem = "Speichern fehlgeschlagen: \(error.localizedDescription)"
             Log.config.error("Speichern fehlgeschlagen: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    // MARK: Darstellung (§23.1)
+
+    /// Picker in Allgemein → „Darstellung“; `.system` landet als `nil` in der Config.
+    var appearance: AppAppearance {
+        get { config.effectiveAppearance }
+        set { config.appearance = newValue }
+    }
+
+    /// Gilt für alle Fenster der App, auch das Auswahlfenster, Sheets, Popover und Alerts.
+    private func applyAppearanceIfEnabled() {
+        guard appliesAppearance else { return }
+        NSApp.appearance = switch config.effectiveAppearance {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
         }
     }
 

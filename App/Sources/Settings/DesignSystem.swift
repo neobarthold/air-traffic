@@ -218,6 +218,76 @@ struct BrandTile: View {
     }
 }
 
+// MARK: - Seiten
+
+/// Seite eines Einstellungs-Tabs wie „Allgemein“ (§15, §23): zentriert, max. 600 pt, scrollt.
+struct SettingsPage<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) { content }
+                .frame(maxWidth: 600)
+                .padding(.vertical, 20)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity)
+        }
+        .background(DS.textBackground)
+    }
+}
+
+/// Kopfkarte einer Seite: großes App-Symbol, Titel, Beschreibung, rechts optional Steuerelemente.
+struct PageHeaderCard<Trailing: View, Footer: View>: View {
+    let icon: NSImage
+    let title: String
+    let detail: String
+    @ViewBuilder var trailing: Trailing
+    @ViewBuilder var footer: Footer
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 52, height: 52)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(detail)
+                        .font(DS.help)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if Trailing.self != EmptyView.self {
+                    Spacer(minLength: 8)
+                    trailing
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+            footer
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: DS.cardRadius).fill(DS.controlBackground))
+        .overlay(RoundedRectangle(cornerRadius: DS.cardRadius).strokeBorder(DS.separator, lineWidth: 0.5))
+    }
+}
+
+extension PageHeaderCard where Footer == EmptyView {
+    init(icon: NSImage, title: String, detail: String, @ViewBuilder trailing: () -> Trailing) {
+        self.init(icon: icon, title: title, detail: detail, trailing: trailing, footer: { EmptyView() })
+    }
+}
+
+extension PageHeaderCard where Trailing == EmptyView, Footer == EmptyView {
+    init(icon: NSImage, title: String, detail: String) {
+        self.init(icon: icon, title: title, detail: detail, trailing: { EmptyView() }, footer: { EmptyView() })
+    }
+}
+
 // MARK: - Karten
 
 /// Gruppierte Karte (Allgemein, Browser).

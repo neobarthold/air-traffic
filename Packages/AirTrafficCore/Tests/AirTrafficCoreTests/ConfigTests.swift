@@ -182,6 +182,42 @@ struct ConfigTests {
         #expect(try ConfigStore.decode(Data(partial.utf8)).extensionSettings == ExtensionSettings(fallbackAction: .prompt(.running)))
     }
 
+    @Test func appearanceRoundTripWithAndWithout() throws {
+        var config = Self.fullConfig()
+        let without = String(decoding: try ConfigStore.encode(config), as: UTF8.self)
+        #expect(!without.contains("appearance"), "fehlt = nicht geschrieben")
+        #expect(try ConfigStore.decode(Data(without.utf8)).effectiveAppearance == .system)
+
+        for value in [AppAppearance.light, .dark] {
+            config.appearance = value
+            let data = try ConfigStore.encode(config)
+            #expect(String(decoding: data, as: UTF8.self).contains(#""appearance" : "\#(value.rawValue)""#))
+            let decoded = try ConfigStore.decode(data)
+            #expect(decoded == config)
+            #expect(decoded.effectiveAppearance == value)
+        }
+
+        config.appearance = .system
+        #expect(config.appearance == nil, "system wird als nil gespeichert")
+        let system = String(decoding: try ConfigStore.encode(config), as: UTF8.self)
+        #expect(!system.contains("appearance"))
+        #expect(Config(appearance: .system).appearance == nil)
+    }
+
+    @Test func appearanceMissingOrUnknownLoadsAsSystem() throws {
+        let old = #"{"schemaVersion":1,"defaultAction":{"type":"prompt","scope":"all"}}"#
+        let config = try ConfigStore.decode(Data(old.utf8))
+        #expect(config.appearance == nil)
+        #expect(config.effectiveAppearance == .system)
+
+        let explicit = #"{"schemaVersion":1,"appearance":"system"}"#
+        #expect(try ConfigStore.decode(Data(explicit.utf8)).appearance == nil)
+        let unknown = #"{"schemaVersion":1,"appearance":"sepia"}"#
+        #expect(try ConfigStore.decode(Data(unknown.utf8)).effectiveAppearance == .system)
+        let dark = #"{"schemaVersion":1,"appearance":"dark"}"#
+        #expect(try ConfigStore.decode(Data(dark.utf8)).appearance == .dark)
+    }
+
     @Test func testURLRoundTripWithAndWithout() throws {
         var config = Self.fullConfig()
         let without = String(decoding: try ConfigStore.encode(config), as: UTF8.self)

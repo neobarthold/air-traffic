@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Einstellungen → Allgemein → „Updates“ (SPEC §17).
+/// Einstellungen → „Updates & Import“ → „Updates“ (SPEC §17, §23.3).
 struct UpdatesSettingsSection: View {
     let updates: UpdateController?
 

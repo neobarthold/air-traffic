@@ -9,9 +9,11 @@ struct RuleEditorView: View {
     let position: Int
     /// „Regel n zeigen“ im Vorrang-Hinweis: diese Regel in der Liste auswählen.
     let onShowRule: (UUID) -> Void
+    /// URL-Prüfung aktiv (§22.4): Testleiste nutzt diese URL und die Simulation aus `model`
+    /// statt der gespeicherten Test-URL; `rule.testURL` bleibt unverändert.
+    var checkURL: URL?
     @State private var assistRequest: RegexAssistantRequest?
     @State private var showKeyHint = false
-    @State private var showSimulation = false
     @State private var simulatedSource = ""
     @State private var simulatedModifiers: ModifierSet = []
     @State private var editorHeight: CGFloat = 560
@@ -29,8 +31,9 @@ struct RuleEditorView: View {
         (rule.testURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Gültige Test-URL (mit Schema) oder nil.
+    /// Geprüfte URL (§22.4) bzw. gültige Test-URL (mit Schema) oder nil.
     private var testURL: URL? {
+        if let checkURL { return checkURL }
         guard !trimmedTestURL.isEmpty, let url = URL(string: trimmedTestURL),
               let scheme = url.scheme, !scheme.isEmpty
         else { return nil }
@@ -38,12 +41,18 @@ struct RuleEditorView: View {
     }
 
     private var testContext: LinkContext {
+        if checkURL != nil { return model.ruleCheckContext }
         let id = simulatedSource.trimmingCharacters(in: .whitespaces)
         return LinkContext(sourceBundleIdentifier: id.isEmpty ? nil : id, modifiers: simulatedModifiers)
     }
 
-    private var simulationActive: Bool {
-        !simulatedSource.trimmingCharacters(in: .whitespaces).isEmpty || !simulatedModifiers.isEmpty
+    /// Im Prüfmodus gilt die Simulation der URL-Prüfung (§22.2), sonst die eigene des Editors.
+    private var simulationSource: Binding<String> {
+        checkURL == nil ? $simulatedSource : $model.ruleCheckSource
+    }
+
+    private var simulationModifiers: Binding<ModifierSet> {
+        checkURL == nil ? $simulatedModifiers : $model.ruleCheckModifiers
     }
 
     var body: some View {
@@ -212,19 +221,15 @@ struct RuleEditorView: View {
                     .foregroundStyle(.secondary)
                     .labelStyle(.titleAndIcon)
                     .frame(width: 52, alignment: .leading)
-                DSTextField("Test-URL", text: testURLText, prompt: "https://…", mono: true)
-                Button { showSimulation.toggle() } label: {
-                    Label("Simulieren …", systemImage: "slider.horizontal.3")
+                if let checkURL {
+                    checkURLField(checkURL)
+                } else {
+                    DSTextField("Test-URL", text: testURLText, prompt: "https://…", mono: true)
                 }
-                .overlay(alignment: .topTrailing) {
-                    if simulationActive {
-                        Circle().fill(Color.accentColor).frame(width: 7, height: 7).offset(x: 2, y: -2)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .help("Quell-App und Modifier simulieren")
-                .accessibilityValue(simulationActive ? "Simulation aktiv" : "")
-                .popover(isPresented: $showSimulation, arrowEdge: .top) { simulationPopover }
+                SimulationButton(source: simulationSource, modifiers: simulationModifiers)
+            }
+            if let checkURL {
+                saveCheckURLRow(checkURL)
             }
 
             ScrollView {
@@ -242,21 +247,34 @@ struct RuleEditorView: View {
         .overlay(alignment: .top) { Divider() }
     }
 
-    private var simulationPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Weitere Bedingungen simulieren").font(DS.cardTitle)
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-                GridRow {
-                    Text("Quell-App").font(DS.body)
-                    SourceAppField(bundleIdentifier: $simulatedSource).frame(width: 300)
-                }
-                GridRow {
-                    Text("Modifier").font(DS.body)
-                    ModifierToggles(modifiers: $simulatedModifiers)
-                }
-            }
+    /// Geprüfte URL statt Eingabefeld (§22.4): nicht editierbar; Pill „aus URL-Prüfung“ in der Zeile darunter.
+    private func checkURLField(_ url: URL) -> some View {
+        HStack(spacing: 6) {
+            Text(url.absoluteString)
+                .font(DS.mono)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(url.absoluteString)
         }
-        .padding(14)
+        .modifier(FieldChrome())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Test-URL aus URL-Prüfung: \(url.absoluteString)")
+    }
+
+    private func saveCheckURLRow(_ url: URL) -> some View {
+        let isSaved = trimmedTestURL == url.absoluteString
+        return HStack(spacing: 8) {
+            StatusPill(.neutral, "aus URL-Prüfung", symbol: "link", small: true)
+                .fixedSize()
+            Button("Als Test-URL speichern") { rule.testURL = url.absoluteString }
+                .controlSize(.small)
+                .disabled(isSaved)
+                .help(isSaved ? "Ist bereits die Test-URL dieser Regel" : "Geprüfte URL als Test-URL dieser Regel speichern")
+        }
+        .padding(.leading, 60)
     }
 
     @ViewBuilder private func testResults(_ result: RuleTestResult?) -> some View {
@@ -267,7 +285,7 @@ struct RuleEditorView: View {
                     if result.matches {
                         StatusPill(.ok, shadowRule == nil ? "Trifft" : "Diese Regel trifft")
                             .fixedSize()
-                        opensText(result.finalURL, hypothetical: shadowRule != nil)
+                        ActionText.opens(rule.action, url: result.finalURL, hypothetical: shadowRule != nil)
                             .font(DS.help)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
@@ -305,22 +323,6 @@ struct RuleEditorView: View {
               rule.conditions.indices.contains(index)
         else { return "Trifft nicht" }
         return "Trifft nicht · Bedingung \(index + 1) (\(RuleText.fieldName(rule.conditions[index]))) nicht erfüllt"
-    }
-
-    /// „öffnet ‹URL› in ‹App›“ bzw. die Aktion in Worten.
-    private func opensText(_ url: URL, hypothetical: Bool) -> Text {
-        let urlText = Text(url.absoluteString).font(DS.monoSmall).foregroundStyle(.primary)
-        switch rule.action {
-        case .open(let app):
-            let appText = Text(app.displayName).fontWeight(.semibold).foregroundStyle(.primary)
-            return Text("\(hypothetical ? "würde öffnen" : "öffnet") \(urlText) in \(appText)")
-        case .openFirstRunning(let fallback):
-            let rest = fallback.map { ", sonst in \($0.displayName)" } ?? ""
-            return Text("\(hypothetical ? "würde öffnen" : "öffnet") \(urlText) im ersten laufenden Browser\(rest)")
-        case .prompt(let scope):
-            let which = scope == .all ? "alle Browser" : "laufende Browser"
-            return Text("\(hypothetical ? "würde" : "zeigt") \(urlText) im Auswahlfenster\(hypothetical ? " zeigen" : "") (\(which))")
-        }
     }
 
     private func actionPhrase(_ action: Action) -> String {
@@ -446,8 +448,10 @@ struct RuleEditorView: View {
 
     /// Vorbelegung der Beispiel-URLs im KI-Sheet (§14.1): Test-URL nach den Umschreibungen vor `index`.
     private func assistantExamples(beforeRewrite index: Int) -> [String] {
-        guard !trimmedTestURL.isEmpty else { return [] }
-        var text = trimmedTestURL
+        // Im Prüfmodus die geprüfte URL – dieselbe, die Bedingungen und Zwischenschritte zeigen.
+        let base = checkURL?.absoluteString ?? trimmedTestURL
+        guard !base.isEmpty else { return [] }
+        var text = base
         for rewrite in rule.rewrites.prefix(index) {
             guard let next = try? Rewriter.apply(rewrite, to: text) else { break }
             text = next

@@ -15,24 +15,40 @@ Standardaktion – zum Beispiel ein kleines Auswahlfenster mit allen Browsern.
   umleiten oder Tracking-Parameter entfernen. Mehrere Schritte laufen nacheinander.
 - **Test je Regel:** Test-URL im Regel-Editor zeigt live, welche Bedingung trifft, jeden
   Umschreibschritt, die Ergebnis-URL und ob eine frühere Regel zuerst greift.
+- **URL prüfen:** eine URL ins Suchfeld der Regel-Liste einfügen und sehen, welche Regel greift,
+  welche zusätzlich träfe, aber verdeckt ist, und – unter „Alle Regeln“ – woran die übrigen scheitern.
+  Quell-App und gedrückte Tasten lassen sich simulieren.
 - **Auswahlfenster:** Browser per Zifferntaste wählen, URL vor dem Öffnen bearbeiten, `⌥⏎` öffnet im Hintergrund.
 - **KI-Assistent:** beschreibe eine Umschreibung oder Bedingung in Worten, die App erzeugt den
   regulären Ausdruck und prüft ihn lokal an deinen Beispiel-URLs. Drei Anbieter:
   - OpenRouter (eigener API-Key),
   - Claude-Abo über die installierte Claude-Code-CLI,
   - ChatGPT-Abo über die installierte Codex-CLI.
-- **Safari-Erweiterung:** schickt Links aus Safari per Rechtsklick oder Symbolleisten-Knopf an Air Traffic.
+- **Safari-Erweiterung:** schickt Links aus Safari per Rechtsklick oder Symbolleisten-Knopf an Air Traffic,
+  auf Wunsch mit eigenem Verhalten (Regeln aus, eigene Aktion).
 - **Choosy-Import:** übernimmt Regeln und Browserliste aus Choosy.
 - **Updates:** prüft täglich auf neue Versionen (Sparkle) und installiert sie automatisch –
   sobald weder Auswahlfenster noch Einstellungen offen sind.
+- **Hell und dunkel:** folgt standardmäßig macOS; unter Allgemein → Darstellung fest auf Hell oder Dunkel stellbar.
+
+Die Einstellungen haben fünf Tabs: **Allgemein** (Standardbrowser, Standardaktion, KI-Assistent,
+Darstellung), **Browser**, **Regeln**, **Safari** und **Updates & Import**.
 
 | Auswahlfenster | Allgemein |
 |---|---|
 | ![Auswahlfenster](docs/images/chooser-light.png) | ![Allgemein](docs/images/general-light.png) |
 
+| URL prüfen | Alle Regeln (dunkel) |
+|---|---|
+| ![URL prüfen](docs/images/rules-check-light.png) | ![URL prüfen, alle Regeln](docs/images/rules-check-all-dark.png) |
+
 | Browser | KI-Assistent |
 |---|---|
 | ![Browser](docs/images/browsers-light.png) | ![KI-Assistent](docs/images/assistant-light.png) |
+
+| Safari | Updates & Import |
+|---|---|
+| ![Safari](docs/images/safari-light.png) | ![Updates & Import](docs/images/maintenance-light.png) |
 
 Alle Screenshots stammen aus der neutralen Beispiel-Konfiguration [`docs/demo-config.json`](docs/demo-config.json).
 
@@ -52,14 +68,15 @@ Voraussetzung: macOS 15 oder neuer.
 Links, die du in Safari anklickst, öffnet Safari selbst – sie gehen nicht über den Standardbrowser,
 deine Regeln greifen also nicht. Die mitgelieferte Erweiterung schickt solche Links gezielt an Air Traffic.
 
-**Aktivieren:** Air Traffic → Einstellungen → **Allgemein** → Abschnitt „Safari-Erweiterung“ →
-„In Safari aktivieren …“, dort „Air Traffic“ einschalten. Alternativ direkt in Safari → Einstellungen →
-Erweiterungen. Der Abschnitt in Air Traffic zeigt, ob die Erweiterung aktiv ist.
+**Aktivieren:** Air Traffic → Einstellungen → Tab **Safari** → „In Safari aktivieren …“, dort
+„Air Traffic“ einschalten. Alternativ direkt in Safari → Einstellungen → Erweiterungen. Der Tab in
+Air Traffic zeigt, ob die Erweiterung aktiv ist.
 
 **Bedienung:**
 
 - Rechtsklick auf einen Link → **Mit Air Traffic öffnen**: läuft durch deine Regeln wie jeder andere Link.
-  Als Quell-App gilt Safari (`com.apple.Safari`).
+  Als Quell-App gilt Safari (`com.apple.Safari`). Im Tab **Safari** lassen sich die Regeln für diese Links
+  abschalten und eine eigene Aktion wählen (z. B. immer das Auswahlfenster).
 - Rechtsklick auf einen Link → **Mit Air Traffic auswählen …**: Umschreibungen der passenden Regel
   werden angewendet, dann erscheint immer das Auswahlfenster mit allen Browsern.
 - **Symbolleisten-Knopf** (Air-Traffic-Symbol): öffnet die aktuelle Seite mit Air Traffic.

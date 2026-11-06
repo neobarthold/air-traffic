@@ -53,6 +53,10 @@ public struct Config: Codable, Sendable, Equatable {
     public var assistant: AssistantSettings?
     /// Verhalten für Links aus der Safari-Erweiterung (§21.2). Optional: fehlt = Standard, wird nur geschrieben, wenn gesetzt.
     public var extensionSettings: ExtensionSettings?
+    /// Darstellung der App (§23.1). `nil` = System; `.system` wird als `nil` gespeichert.
+    public var appearance: AppAppearance? {
+        didSet { if appearance == .system { appearance = nil } }
+    }
 
     public init(
         schemaVersion: Int = Config.currentSchemaVersion,
@@ -60,7 +64,8 @@ public struct Config: Codable, Sendable, Equatable {
         rules: [Rule] = [],
         defaultAction: Action = .prompt(.all),
         assistant: AssistantSettings? = nil,
-        extensionSettings: ExtensionSettings? = nil
+        extensionSettings: ExtensionSettings? = nil,
+        appearance: AppAppearance? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.browsers = browsers
@@ -68,7 +73,11 @@ public struct Config: Codable, Sendable, Equatable {
         self.defaultAction = defaultAction
         self.assistant = assistant
         self.extensionSettings = extensionSettings
+        self.appearance = appearance == .system ? nil : appearance
     }
+
+    /// Wirksame Darstellung; fehlt = System.
+    public var effectiveAppearance: AppAppearance { appearance ?? .system }
 
     /// Modell-ID für den Assistenten; leer oder fehlend = Standard.
     public var assistantModel: String {
@@ -77,7 +86,7 @@ public struct Config: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, browsers, rules, defaultAction, assistant, extensionSettings
+        case schemaVersion, browsers, rules, defaultAction, assistant, extensionSettings, appearance
     }
 
     public init(from decoder: any Decoder) throws {
@@ -88,7 +97,17 @@ public struct Config: Codable, Sendable, Equatable {
         defaultAction = try c.decodeIfPresent(Action.self, forKey: .defaultAction) ?? .prompt(.all)
         assistant = try c.decodeIfPresent(AssistantSettings.self, forKey: .assistant)
         extensionSettings = try c.decodeIfPresent(ExtensionSettings.self, forKey: .extensionSettings)
+        // Unbekannter Wert (neuere Version) → System statt Ladefehler.
+        let decoded = (try? c.decodeIfPresent(AppAppearance.self, forKey: .appearance)) ?? nil
+        appearance = decoded == .system ? nil : decoded
     }
+}
+
+/// Darstellung der App (§23.1): System folgt macOS.
+public enum AppAppearance: String, Codable, Sendable, CaseIterable, Identifiable {
+    case system, light, dark
+
+    public var id: String { rawValue }
 }
 
 /// Verhalten für `airtraffic://open`-Links aus der Safari-Erweiterung ohne `prompt` (§21.2):

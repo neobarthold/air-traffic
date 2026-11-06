@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intake = LinkIntake(model: model, opener: opener)
         updates = UpdateController(startingUpdater: true)
         super.init()
+        // Darstellung aus der Config, bevor das erste Fenster (Auswahl oder Einstellungen) erscheint (§23.1).
+        model.appliesAppearance = true
         chooser.opener = opener
         model.updates = updates
         chooser.onClose = { [weak self] in self?.updates.windowsDidClose() }
