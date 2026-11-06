@@ -7,6 +7,13 @@ Standardaktion – zum Beispiel ein kleines Auswahlfenster mit allen Browsern.
 
 ![Regeln mit Test-URL](docs/images/rules-light.png)
 
+## Trailer
+
+[![Air Traffic in 15 Sekunden – Trailer ansehen](docs/images/trailer-poster.png)](Design/Trailer/air-traffic-trailer.mp4)
+
+15 Sekunden, ohne Ton: Regeln, Umschreiben, Auswahlfenster, KI-Assistent und Kommandozeile –
+[MP4 ansehen](Design/Trailer/air-traffic-trailer.mp4).
+
 ## Funktionen
 
 - **Regeln:** Bedingungen auf URL, Host, Pfad, Quell-App, gedrückte Tasten und Linktyp
@@ -156,6 +163,10 @@ Aufbau:
   Agenten-Schnittstelle (Kommandozeile, MCP);
   nur Foundation und CryptoKit (kein AppKit), vollständig getestet.
 - `docs/SPEC.md` – Spezifikation.
+- `Design/Trailer/` – 15-Sekunden-Trailer: `trailer.html` (Animation aus den Screenshots in `docs/images`,
+  im Browser abspielbar, `?t=<Sekunde>` springt zu einem Zeitpunkt) und `render.mjs`, das sie Bild für Bild
+  zu `air-traffic-trailer.mp4` rendert (braucht `playwright-core` mit Chromium und `ffmpeg`):
+  `PLAYWRIGHT_CORE=<pfad>/node_modules/playwright-core node Design/Trailer/render.mjs`.
 
 **Safari-Erweiterung beim Entwickeln:** Debug-Builds sind nur ad hoc signiert. Safari lädt die
 Erweiterung dann erst nach Safari → Einstellungen → Erweitert → „Funktionen für Webentwickler einblenden“
