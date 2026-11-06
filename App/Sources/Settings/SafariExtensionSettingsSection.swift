@@ -1,6 +1,7 @@
 import AirTrafficCore
 import AppKit
 import SafariServices
+import Security
 import SwiftUI
 
 /// Einstellungen → „Safari“ → „Safari-Erweiterung“ (SPEC §20.3, §21.2, §23.2).
@@ -10,8 +11,26 @@ struct SafariExtensionSettingsSection: View {
     @Bindable var model: AppModel
 
     private enum ExtensionState: Equatable {
-        case unknown, enabled, disabled
+        /// `notFound`: Safari kennt die Erweiterung nicht (SFErrorDomain 1); `devBuild`: App ohne Team-ID
+        /// (ad hoc signierter Debug-Build) – Safari führt Erweiterungen nur als „<ID> (<Team-ID>)“.
+        case unknown, enabled, disabled, notFound, devBuild
     }
+
+    /// Team-ID der laufenden App; nil bei Ad-hoc-Signatur (Debug-Build).
+    nonisolated static let teamIdentifier: String? = {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any]
+        else { return nil }
+        return dict[kSecCodeInfoTeamIdentifier as String] as? String
+    }()
+
+    private static let devBuildHint = "Entwicklungs-Build ohne Developer-ID-Signatur: Safari kennt die Erweiterung nur aus der signierten App in /Programme. Status und „In Safari aktivieren …“ funktionieren dort."
+    private static let notFoundHint = "Safari findet die Erweiterung nicht. Starte Air Traffic aus /Programme und öffne Safari einmal neu; danach erscheint sie unter Safari → Einstellungen → Erweiterungen."
 
     @State private var state: ExtensionState = .unknown
     @State private var error: String?
@@ -34,6 +53,16 @@ struct SafariExtensionSettingsSection: View {
                     Spacer()
                     Button("In Safari aktivieren …", action: showInSafari)
                         .help("Safari → Einstellungen → Erweiterungen öffnen")
+                }
+                if state == .devBuild || state == .notFound {
+                    Text(state == .devBuild ? Self.devBuildHint : Self.notFoundHint)
+                        .font(DS.help)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    Divider().padding(.leading, 12)
                 }
                 behaviorRows
             }
@@ -123,6 +152,8 @@ struct SafariExtensionSettingsSection: View {
         case .enabled: StatusPill(.ok, "Aktiv")
         case .disabled: StatusPill(.neutral, "Nicht aktiviert")
         case .unknown: StatusPill(.neutral, "Unbekannt", symbol: "questionmark")
+        case .notFound: StatusPill(.warning, "Von Safari nicht gefunden", symbol: "exclamationmark.triangle")
+        case .devBuild: StatusPill(.neutral, "Entwicklungs-Build", symbol: "hammer")
         }
     }
 
@@ -132,20 +163,29 @@ struct SafariExtensionSettingsSection: View {
 
     /// Fehler (z. B. Erweiterung nicht registriert) → „Unbekannt“.
     private nonisolated static func queryState() async -> ExtensionState {
+        if teamIdentifier == nil { return .devBuild }
         do {
             let enabled = try await SFSafariExtensionManager.stateOfSafariExtension(withIdentifier: extensionIdentifier).isEnabled
             return enabled ? .enabled : .disabled
         } catch {
             Log.app.info("Status der Safari-Erweiterung unbekannt: \(error.localizedDescription, privacy: .public)")
-            return .unknown
+            return (error as NSError).domain == SFErrorDomain && (error as NSError).code == SFErrorCode.noExtensionFound.rawValue
+                ? .notFound : .unknown
         }
     }
 
     private func showInSafari() {
         error = nil
+        guard Self.teamIdentifier != nil else {
+            state = .devBuild
+            return
+        }
         Task {
             do {
                 try await SFSafariApplication.showPreferencesForExtension(withIdentifier: Self.extensionIdentifier)
+            } catch let failure as NSError where failure.domain == SFErrorDomain
+                && failure.code == SFErrorCode.noExtensionFound.rawValue {
+                state = .notFound
             } catch {
                 self.error = "Safari-Einstellungen ließen sich nicht öffnen: \(error.localizedDescription)"
             }

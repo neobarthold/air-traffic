@@ -580,3 +580,6 @@ Ersetzt die Tab-Aufteilung aus §23.3/§24.7:
 - „CLI & MCP“ enthält den Abschnitt „Kommandozeile & KI-Agenten“ (§24.7), „Updates“ nur den Abschnitt Updates (§17).
 - „Import & Konfiguration“ (Choosy-Import, Datei-Pfad, „Air Traffic beenden“) steht wieder in **Allgemein, ganz unten** (nach Darstellung).
 - `--snapshot`: `cli-*`, `updates-*` statt `maintenance-*`; `general-full-*` zeigt Allgemein vollständig.
+
+### 25.1 Status der Safari-Erweiterung im Entwicklungs-Build
+Safari führt Erweiterungen als „<Bundle-ID> (<Team-ID>)“. Ein ad hoc signierter Debug-Build hat keine Team-ID; `SFSafariExtensionManager` und `showPreferencesForExtension` liefern dort `SFErrorDomain 1` (noExtensionFound). Die App erkennt das über die eigene Signatur (keine Team-ID) und zeigt „Entwicklungs-Build“ mit Erklärung statt „Unbekannt“ + Rohfehler; `SFErrorDomain 1` in der signierten App → „Von Safari nicht gefunden“ mit Hinweis (aus /Programme starten, Safari neu öffnen).
