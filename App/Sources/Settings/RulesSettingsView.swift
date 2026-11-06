@@ -130,15 +130,40 @@ struct RulesSettingsView: View {
                 IconButton("plus.square.on.square", help: "Regel duplizieren", tint: .primary, action: duplicateSelected)
                     .disabled(model.selectedRuleID == nil)
                 Spacer(minLength: 4)
-                Text(footerText(checking: check != nil))
-                    .font(DS.small)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        pendingCounter
+                        footerLabel(check != nil)
+                    }
+                    pendingCounter
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 34)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func footerLabel(_ checking: Bool) -> some View {
+        Text(footerText(checking: checking))
+            .font(DS.small)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
+    /// Zähler wartender Regeln in der Fußleiste (§26.1); leer, wenn keine wartet.
+    @ViewBuilder private var pendingCounter: some View {
+        let count = model.pendingRuleCount
+        if count > 0 {
+            Label("\(count) Freigabe nötig", systemImage: "exclamationmark.triangle.fill")
+                .font(DS.small.weight(.semibold))
+                .foregroundStyle(DS.orange)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+                .fixedSize()
+                .help(RuleApproval.countText(count))
+                .accessibilityLabel(RuleApproval.countText(count))
+        }
     }
 
     private func emptyText(_ text: String) -> some View {
@@ -215,6 +240,8 @@ struct RulesSettingsView: View {
             return RuleCheckLine(kind: .shadowed, text: "trifft, aber Regel \(number.map(String.init) ?? "?") greift zuerst")
         case .disabledMatch:
             return RuleCheckLine(kind: .disabledMatch, text: "Aus – würde treffen")
+        case .pendingMatch:
+            return RuleCheckLine(kind: .pending, text: "trifft, wartet auf Freigabe")
         case .noMatch:
             guard let index = entry.firstFailedCondition, rule.conditions.indices.contains(index) else {
                 return RuleCheckLine(kind: .noMatch, text: "trifft nicht")
@@ -356,9 +383,10 @@ private struct RuleCheckCard: View {
                 Text(winner.name.isEmpty ? "Ohne Namen" : winner.name)
                     .font(DS.cardTitle)
                     .fixedSize(horizontal: false, vertical: true)
-                // URL nur, wenn Umschreibungen sie ändern (§22.2).
+                // URL nur, wenn Umschreibungen sie ändern (§22.2). Aktion aus der Entscheidung: bei einer
+                // wartenden Änderung gilt der freigegebene Stand (§26.1).
                 let rewritten = result.decision.finalURL != result.decision.originalURL
-                ActionText.opens(winner.action, url: rewritten ? result.decision.finalURL : nil)
+                ActionText.opens(result.decision.action, url: rewritten ? result.decision.finalURL : nil)
                     .font(DS.help)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -367,6 +395,13 @@ private struct RuleCheckCard: View {
                 Text("Standardaktion: \(ActionText.opens(defaultAction, url: nil))")
                     .font(DS.help)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let from = result.decision.originalURL.scheme?.lowercased(),
+               let to = result.decision.finalURL.scheme?.lowercased(), from != to {
+                Label("Schemawechsel „\(from):“ → „\(to):“", systemImage: "exclamationmark.triangle")
+                    .font(DS.small)
+                    .foregroundStyle(DS.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(result.decision.warnings, id: \.self) { warning in
@@ -393,7 +428,7 @@ private struct RuleCheckCard: View {
 
 /// Status einer Regel in der Liste im Prüfmodus (§22.3).
 struct RuleCheckLine: Equatable {
-    enum Kind { case wins, shadowed, disabledMatch, noMatch }
+    enum Kind { case wins, shadowed, disabledMatch, pending, noMatch }
     let kind: Kind
     let text: String
 }
@@ -476,6 +511,7 @@ private struct RuleRow: View {
             let (symbol, color): (String, Color) = switch line.kind {
             case .wins: ("checkmark", DS.green)
             case .shadowed: ("exclamationmark.triangle", DS.orange)
+            case .pending: ("clock", DS.orange)
             case .disabledMatch, .noMatch: ("xmark", .secondary)
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -493,13 +529,21 @@ private struct RuleRow: View {
 
     private var displayName: String { rule.name.isEmpty ? "Ohne Namen" : rule.name }
 
-    /// Alle Chips in Anzeigereihenfolge (Text, umrandet).
-    private var chipItems: [(String, Bool)] {
-        var items: [(String, Bool)] = []
-        if !rule.enabled { items.append(("Aus", true)) }
-        items += rule.conditions.prefix(2).map { (RuleText.chip($0), false) }
-        if rule.conditions.isEmpty { items.append(("immer", false)) }
-        if !rule.rewrites.isEmpty { items.append(("↻ umschreiben", false)) }
+    private struct ChipItem {
+        var text: String
+        var outlined = false
+        var warning = false
+    }
+
+    /// Alle Chips in Anzeigereihenfolge; „Freigabe nötig“ (orange) zuerst, dann das Ziel der Umschreibung
+    /// („↻ review.example.com“) vor den Bedingungen, damit es auch in schmalen Zeilen sichtbar bleibt (§26.1).
+    private var chipItems: [ChipItem] {
+        var items: [ChipItem] = []
+        if rule.isPendingApproval { items.append(ChipItem(text: "Freigabe nötig", warning: true)) }
+        if !rule.enabled { items.append(ChipItem(text: "Aus", outlined: true)) }
+        if let rewrite = RuleDescriber.rewriteChip(rule.rewrites) { items.append(ChipItem(text: rewrite)) }
+        items += rule.conditions.prefix(2).map { ChipItem(text: RuleText.chip($0)) }
+        if rule.conditions.isEmpty { items.append(ChipItem(text: "immer")) }
         return items
     }
 
@@ -518,10 +562,11 @@ private struct RuleRow: View {
         .clipped()
     }
 
-    private func chipRow(_ items: [(String, Bool)], more: Int, compress: Bool = false) -> some View {
+    private func chipRow(_ items: [ChipItem], more: Int, compress: Bool = false) -> some View {
         HStack(spacing: 4) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Chip(item.0, outlined: item.1, onAccent: onAccent, maxWidth: compress ? 130 : 160)
+                Chip(item.text, outlined: item.outlined, onAccent: onAccent, maxWidth: compress ? 130 : 160,
+                     tint: item.warning ? DS.orange : nil)
             }
             if more > 0 { Chip("+\(more)", onAccent: onAccent) }
         }

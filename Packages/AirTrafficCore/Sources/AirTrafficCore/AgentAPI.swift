@@ -41,17 +41,23 @@ public struct AgentAPI: Sendable {
                 "name": .string(rule.name),
                 "enabled": .bool(rule.enabled),
                 "summary": .string(RuleDescriber.summary(rule)),
+                "pendingApproval": .bool(rule.isPendingApproval),
             ]
         }
         var lines = config.rules.isEmpty ? ["Keine Regeln."] : []
         let ids = config.rules.map { $0.id.uuidString.lowercased() }
         for (index, rule) in config.rules.enumerated() {
             let mark = rule.enabled ? "●" : "○"
-            lines.append(String(format: "%3d  ", index + 1) + "\(mark) \(rule.name)  [\(Self.shortID(ids[index], among: ids))]")
+            let pending = rule.isPendingApproval ? "  ⏳ \(RuleApproval.waitingText)" : ""
+            lines.append(String(format: "%3d  ", index + 1) + "\(mark) \(rule.name)  [\(Self.shortID(ids[index], among: ids))]\(pending)")
             lines.append("       \(RuleDescriber.summary(rule))")
         }
         lines.append("")
         lines.append("Oben gewinnt: die erste aktive Regel, deren Bedingungen passen. ● aktiv, ○ aus.")
+        let pendingCount = RuleApproval.pendingCount(in: config)
+        if pendingCount > 0 {
+            lines.append("⏳ \(RuleApproval.countText(pendingCount)) – sie wirken erst, wenn der Nutzer sie in Air Traffic freigibt.")
+        }
         return AgentResult(
             json: ["rules": .array(items), "count": .number(Double(config.rules.count)), "configPath": .string(configPath)],
             text: lines.joined(separator: "\n")
@@ -63,19 +69,23 @@ public struct AgentAPI: Sendable {
         let index = try RuleRef.resolve(ref, in: config.rules)
         let rule = config.rules[index]
         let json = try ruleJSON(rule, position: index + 1)
-        let text = "#\(index + 1) \(rule.name) (\(rule.enabled ? "aktiv" : "aus"))\n\(RuleDescriber.summary(rule))\n\n\(json.jsonString(pretty: true))"
+        let pending = rule.pendingChange.map { "\n⏳ \(RuleApproval.waitingText) (\($0.reason))" } ?? ""
+        let text = "#\(index + 1) \(rule.name) (\(rule.enabled ? "aktiv" : "aus"))\n\(RuleDescriber.summary(rule))\(pending)\n\n\(json.jsonString(pretty: true))"
         return AgentResult(json: ["rule": json], text: text)
     }
 
     // MARK: Schreiben
 
     /// Legt eine Regel an (Standard: ans Ende). `position` überschreibt ein `position`-Feld im JSON.
+    /// Die Regel wartet auf Freigabe in der App (§26.1).
     public func createRule(_ json: JSONValue, position: Int? = nil, dryRun: Bool = false) throws -> AgentResult {
         var warnings: [String] = []
-        let result = try store.modify(dryRun: dryRun, now: now()) { config throws -> UUID in
+        let date = now()
+        let result = try store.modify(dryRun: dryRun, now: date) { config throws -> UUID in
             let output = try RuleInput(resolver: resolver, browsers: config.browsers).makeRule(from: json)
             warnings = output.warnings
-            try RuleEditing.insert(output.rule, at: position ?? output.position, into: &config)
+            let rule = RuleApproval.gate(old: nil, new: output.rule, now: date)
+            try RuleEditing.insert(rule, at: position ?? output.position, into: &config)
             return output.rule.id
         }
         return try writeResult(
@@ -86,13 +96,16 @@ public struct AgentAPI: Sendable {
     }
 
     /// Ersetzt die Felder aus `patch`; `conditions`/`rewrites` als ganze Liste, `position` verschiebt.
+    /// Änderungen an Umschreibungen oder Aktion warten auf Freigabe in der App (§26.1).
     public func updateRule(_ ref: String, patch: JSONValue, dryRun: Bool = false) throws -> AgentResult {
         var warnings: [String] = []
-        let result = try store.modify(dryRun: dryRun, now: now()) { config throws -> UUID in
+        let date = now()
+        let result = try store.modify(dryRun: dryRun, now: date) { config throws -> UUID in
             let index = try RuleRef.resolve(ref, in: config.rules)
-            let output = try RuleInput(resolver: resolver, browsers: config.browsers).apply(patch: patch, to: config.rules[index])
+            let old = config.rules[index]
+            let output = try RuleInput(resolver: resolver, browsers: config.browsers).apply(patch: patch, to: old)
             warnings = output.warnings
-            config.rules[index] = output.rule
+            config.rules[index] = RuleApproval.gate(old: old, new: output.rule, now: date)
             if let position = output.position { try RuleEditing.move(from: index, to: position, in: &config) }
             return output.rule.id
         }
@@ -181,6 +194,7 @@ public struct AgentAPI: Sendable {
                 "enabled": .bool(rule.enabled),
                 "matches": .bool(entry.matches),
                 "status": .string(Self.statusName(entry.status)),
+                "pendingApproval": .bool(rule.isPendingApproval),
             ]
             if case .shadowed(let by) = entry.status, let (position, _) = byID[by] {
                 item["shadowedByPosition"] = .number(Double(position))
@@ -201,6 +215,9 @@ public struct AgentAPI: Sendable {
         }
         lines.append("Ergebnis: \(RuleDescriber.action(result.decision.action))")
         if result.decision.finalURL != url { lines.append("Umgeschrieben: \(result.decision.finalURL.absoluteString)") }
+        if let from = url.scheme?.lowercased(), let to = result.decision.finalURL.scheme?.lowercased(), from != to {
+            lines.append("Warnung: Schemawechsel „\(from):“ → „\(to):“")
+        }
         for warning in result.decision.warnings { lines.append("Warnung: \(warning)") }
         lines.append("")
         for entry in result.entries {
@@ -233,6 +250,7 @@ public struct AgentAPI: Sendable {
         case .wins: "wins"
         case .shadowed: "shadowed"
         case .disabledMatch: "disabledMatch"
+        case .pendingMatch: "pendingMatch"
         case .noMatch: "noMatch"
         }
     }
@@ -242,9 +260,10 @@ public struct AgentAPI: Sendable {
         case .wins: "greift"
         case .shadowed(let by): "verdeckt von #\(byID[by]?.0 ?? 0)"
         case .disabledMatch: "passt, aber aus"
+        case .pendingMatch: "wartet auf Freigabe"
         case .noMatch: entry.firstFailedCondition.map { "–  (Bed. \($0 + 1))" } ?? "–"
         }
-        return text.padding(toLength: 18, withPad: " ", startingAt: 0)
+        return text.padding(toLength: 20, withPad: " ", startingAt: 0)
     }
 
     // MARK: Browser, Einstellungen
@@ -344,6 +363,12 @@ public struct AgentAPI: Sendable {
         ]
         if let backup { json["backup"] = .string(backup.path(percentEncoded: false)) }
         var lines = ["\(verb): #\(index + 1) \(rule.name) (\(rule.enabled ? "aktiv" : "aus"))", RuleDescriber.summary(rule)]
+        json["pendingApproval"] = .bool(rule.isPendingApproval)
+        if let pending = rule.pendingChange {
+            json["pendingReason"] = .string(pending.reason)
+            json["note"] = .string("Änderung \(RuleApproval.waitingText): Umschreibungen und Aktion wirken erst, wenn der Nutzer sie in der App freigibt. Bis dahin gilt \(pending.previous == nil ? "die Regel nicht" : "der zuletzt freigegebene Stand").")
+            lines.append("⏳ \(RuleApproval.waitingText) (\(pending.reason)). Bis zur Freigabe gilt \(pending.previous == nil ? "die Regel nicht" : "der zuletzt freigegebene Stand").")
+        }
         for warning in warnings { lines.append("Warnung: \(warning)") }
 
         if let preview = testPreview(rule: rule, config: config) {
@@ -351,6 +376,15 @@ public struct AgentAPI: Sendable {
             lines.append(preview.text)
         } else {
             json["check"] = .null
+        }
+        // Vorschau nach Freigabe: dieselbe Prüfung mit freigegebener Regel.
+        if rule.isPendingApproval {
+            var approved = config
+            approved.rules[index] = RuleApproval.approve(rule)
+            if let preview = testPreview(rule: approved.rules[index], config: approved) {
+                json["checkAfterApproval"] = preview.json
+                lines.append("Nach Freigabe: \(preview.text)")
+            }
         }
         if let backup { lines.append("Sicherung: \(abbreviate(backup))") }
         if dryRun {
@@ -377,6 +411,8 @@ public struct AgentAPI: Sendable {
             "passt, aber #\((winner ?? 0) + 1) „\(winner.map { config.rules[$0].name } ?? "?")“ greift vorher"
         case .disabledMatch:
             "passt, Regel ist aber aus"
+        case .pendingMatch:
+            "passt, \(RuleApproval.waitingText)"
         case .noMatch:
             "trifft nicht" + (entry.firstFailedCondition.map { " (Bedingung \($0 + 1) nicht erfüllt)" } ?? "")
         }

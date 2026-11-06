@@ -6,24 +6,35 @@ import AppKit
 final class Opener {
     private let model: AppModel
     private let chooser: ChooserController
+    /// Dieselbe URL höchstens 3-mal in 5 s automatisch an eine App (§26.9).
+    private var loopBrake = LoopBrake()
 
     init(model: AppModel, chooser: ChooserController) {
         self.model = model
         self.chooser = chooser
     }
 
-    func execute(_ decision: Decision, context: LinkContext) {
-        let url = decision.finalURL
+    /// `sourceLabel`: Text statt „von ‹Quell-App›“ im Auswahlfenster (z. B. „über airtraffic://-Link“, §26.4).
+    func execute(_ decision: Decision, context: LinkContext, sourceLabel: String? = nil) {
+        var url = decision.finalURL
+        var hint = decision.warnings.first
         // Schleifenschutz (§20.1): Air Traffic öffnet `airtraffic://` nie selbst – auch nicht nach Umschreibungen.
         guard !AirTrafficURL.isAirTrafficURL(url) else {
             Log.opener.error("airtraffic-Link als Ziel verworfen (Schleifenschutz)")
             return
         }
+        // `file:` nur, wenn die Original-URL schon `file:` war (§26.2) – zusätzlich zur Prüfung im Rewriter.
+        if url.isFileURL, !decision.originalURL.isFileURL {
+            Log.opener.error("Umschreibung auf file: verworfen – Original-URL verwendet")
+            url = decision.originalURL
+            hint = "Umschreibung auf file: verworfen"
+        }
         let request = ChooserRequest(
             url: url,
             sourceBundleIdentifier: context.sourceBundleIdentifier,
+            sourceLabel: sourceLabel,
             scope: .all,
-            hint: decision.warnings.first
+            hint: hint
         )
 
         switch decision.action {
@@ -57,6 +68,12 @@ final class Opener {
             Log.opener.notice("Schleifenschutz: \(app.displayName, privacy: .public) → \(first.displayName, privacy: .public)")
             target = first
         }
+        // Schleifenbremse (§26.9): kreist ein Link zwischen Apps, entscheidet der Nutzer.
+        guard loopBrake.allow(url) else {
+            Log.opener.warning("Schleifenbremse: Link mehr als 3-mal in 5 s – Auswahlfenster")
+            chooser.present(request.with(hint: LoopBrake.hint))
+            return
+        }
         if !open(url, with: target, activates: true) {
             chooser.present(request.with(hint: "„\(target.displayName)“ wurde nicht gefunden."))
         }
@@ -78,7 +95,8 @@ final class Opener {
         Log.opener.info("Öffne \(url.absoluteString, privacy: .private) mit \(appURL.lastPathComponent, privacy: .public)")
         NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { _, error in
             if let error {
-                Log.opener.error("Öffnen fehlgeschlagen: \(error.localizedDescription, privacy: .public)")
+                // Fehlermeldungen von LaunchServices können die URL enthalten (§26.7).
+                Log.opener.error("Öffnen fehlgeschlagen: \(error.localizedDescription, privacy: .private)")
             }
         }
         return true

@@ -1,3 +1,5 @@
+// Debug-Schalter: nur im Debug-Build (§26.5); der Release-Build kennt den Befehl nicht.
+#if DEBUG
 import AirTrafficCore
 import AppKit
 import SwiftUI
@@ -66,6 +68,22 @@ enum SnapshotCommand {
                 if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
             }
 
+            // Freigabe (§26.1): wartende Regel in Liste und Editor. Hat die Config keine, wird nur für den
+            // Snapshot eine Regel als wartend markiert (`persists: false` – nichts wird gespeichert).
+            let savedRules = model.config.rules
+            if let pendingID = preparePendingRule(model) {
+                for (name, size) in [("rules-pending", settingsSize), ("rules-pending-min", SettingsWindowController.minSize)] {
+                    model.ruleQuery = ""
+                    model.selectedRuleID = pendingID
+                    model.settingsTab = .rules
+                    window.setContentSize(size)
+                    await settle(window)
+                    let file = dir.appending(path: "\(name)-\(suffix).png")
+                    if writePNG(of: window, to: file) { written.append(file.lastPathComponent) }
+                }
+            }
+            model.config.rules = savedRules
+
             // URL-Prüfung (§22.6): URL mit Gewinner und verdeckter Regel; „Nur Treffer“ mit
             // ausgewähltem Gewinner, „Alle Regeln“ mit ausgewählter verdeckter Regel bei Mindestgröße.
             if let check = checkExample(model.config) {
@@ -121,6 +139,24 @@ enum SnapshotCommand {
     }
 
     // MARK: Auswahl der Regeln
+
+    /// Erste wartende Regel; sonst die erste Regel mit Umschreibung und Test-URL als „von außen
+    /// umgeschrieben“ markieren (vorher ohne Umschreibung), notfalls die erste Regel als neu angelegt.
+    private static func preparePendingRule(_ model: AppModel) -> UUID? {
+        if let id = model.firstPendingRuleID { return id }
+        let since = Date(timeIntervalSince1970: 1_793_958_060)  // 2026-11-06 09:41 UTC, fest für stabile Bilder
+        if let index = model.config.rules.firstIndex(where: { !$0.rewrites.isEmpty && testURL(of: $0) != nil }) {
+            var previous = model.config.rules[index]
+            previous.rewrites = []
+            model.config.rules[index].pendingChange = PendingChange(
+                since: since, reason: "Umschreibungen geändert von außen (CLI/MCP)", previous: previous
+            )
+            return model.config.rules[index].id
+        }
+        guard !model.config.rules.isEmpty else { return nil }
+        model.config.rules[0].pendingChange = PendingChange(since: since, reason: "neu angelegt von außen (CLI/MCP)", previous: nil)
+        return model.config.rules[0].id
+    }
 
     private static func firstRuleWithTestURL(_ config: Config) -> UUID? {
         config.rules.first { testURL(of: $0) != nil }?.id
@@ -281,3 +317,4 @@ private struct SnapshotKeyStore: APIKeyStore {
     func saveKey(_ key: String) throws {}
     func deleteKey() throws {}
 }
+#endif

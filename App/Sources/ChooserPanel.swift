@@ -5,6 +5,8 @@ import SwiftUI
 struct ChooserRequest {
     var url: URL
     var sourceBundleIdentifier: String?
+    /// Ersetzt „von ‹Quell-App›“, z. B. „über airtraffic://-Link“ (§26.4).
+    var sourceLabel: String? = nil
     var scope: PromptScope
     var hint: String?
 
@@ -25,7 +27,8 @@ final class ChooserState {
     var hint: String?
     /// URL-Feld fokussiert → vollständiges Textfeld statt strukturierter Anzeige.
     var isEditingURL = false
-    let sourceName: String?
+    /// Kopfzeile: „von ‹App›“ bzw. `ChooserRequest.sourceLabel`.
+    let sourceText: String?
     let sourceIcon: NSImage?
     /// Je Browser: läuft / nicht gefunden (beim Öffnen des Panels ermittelt).
     let running: [Bool]
@@ -37,11 +40,14 @@ final class ChooserState {
         running = browsers.map(Apps.isRunning)
         missing = browsers.map { Apps.url(for: $0) == nil }
         hint = request.hint
-        if let id = request.sourceBundleIdentifier {
-            sourceName = Apps.displayName(forBundleIdentifier: id) ?? id
+        if let label = request.sourceLabel {
+            sourceText = label
+            sourceIcon = nil
+        } else if let id = request.sourceBundleIdentifier {
+            sourceText = "von \(Apps.displayName(forBundleIdentifier: id) ?? id)"
             sourceIcon = Apps.icon(forBundleIdentifier: id)
         } else {
-            sourceName = nil
+            sourceText = nil
             sourceIcon = nil
         }
     }
@@ -103,6 +109,13 @@ final class ChooserController: NSObject, NSWindowDelegate {
     private var queue: [ChooserRequest] = []
     private var panel: ChooserPanel?
     private var state: ChooserState?
+    /// URL des gezeigten Eintrags (vor Bearbeitung) – zum Zusammenfassen gleicher Links (§26.8).
+    private var shownURL: URL?
+    /// Zeitpunkt, zu dem der gezeigte Eintrag erschien; Tasten zählen erst danach (§26.8).
+    private var shownAt = Date.distantPast
+    private var queuePolicy = ChooserQueuePolicy()
+    /// Ziffern und ⏎ in dieser Zeit nach dem Erscheinen ignorieren (gegen Fehl-Tastendrücke).
+    static let keyGuard: TimeInterval = 0.3
     private weak var urlField: NSTextField?
     /// Vorne liegende App beim Öffnen; bekommt bei Abbruch den Fokus zurück, falls Air Traffic aktiv wurde.
     private var previousApp: NSRunningApplication?
@@ -116,14 +129,29 @@ final class ChooserController: NSObject, NSWindowDelegate {
         self.model = model
     }
 
+    /// Höchstens 5 wartende Einträge, gleiche URLs zusammengefasst; läuft die Warteschlange über,
+    /// wird verworfen und 10 s lang nur protokolliert (§26.8).
     func present(_ request: ChooserRequest) {
-        queue.append(request)
-        if panel == nil { showNext() }
+        switch queuePolicy.admit(request.url, showing: panel == nil ? nil : shownURL, queued: queue.map(\.url)) {
+        case .accept:
+            queue.append(request)
+            if panel == nil { showNext() }
+        case .merged:
+            Log.chooser.info("Auswahlfenster: gleicher Link wird schon gezeigt oder wartet – zusammengefasst")
+        case .dropped(let firstOfBurst):
+            if firstOfBurst {
+                Log.chooser.warning("Auswahlfenster: Warteschlange voll (\(ChooserQueuePolicy.maxQueued)) – Link verworfen, 10 s lang nur Log")
+            } else {
+                Log.chooser.notice("Auswahlfenster: Link verworfen (Warteschlange war voll)")
+            }
+        }
     }
 
     private func showNext() {
         guard !queue.isEmpty else { return }
         let request = queue.removeFirst()
+        shownURL = request.url
+        shownAt = Date()
 
         var browsers = model.effectiveBrowsers
         if request.scope == .running {
@@ -260,6 +288,7 @@ final class ChooserController: NSObject, NSWindowDelegate {
         panel.orderOut(nil)
         self.panel = nil
         state = nil
+        shownURL = nil
         urlField = nil
         let previous = previousApp
         previousApp = nil
@@ -323,9 +352,14 @@ final class ChooserController: NSObject, NSWindowDelegate {
             if chars.lowercased() == "c" { copyURL(); return true }
             return false
         }
+        // Kurz nach dem Erscheinen: Ziffern und ⏎ verbrauchen, aber nichts öffnen (§26.8).
+        let tooEarly = Date().timeIntervalSince(shownAt) < Self.keyGuard
         switch event.keyCode {
         case Key.escape: close(panel, restoreFocus: true); return true
-        case Key.returnKey, Key.enter: open(index: nil); return true
+        case Key.returnKey, Key.enter:
+            if tooEarly { return true }
+            open(index: nil)
+            return true
         case Key.tab: focusURLField(); return true
         case Key.left:
             if !state.browsers.isEmpty { state.selection = max(0, state.selection - 1) }
@@ -336,6 +370,7 @@ final class ChooserController: NSObject, NSWindowDelegate {
         default: break
         }
         if let digit = Int(chars), (1...9).contains(digit) {
+            if tooEarly { return true }
             open(index: digit - 1)
             return true
         }
@@ -405,13 +440,13 @@ struct ChooserView: View {
     // MARK: Kopf
 
     @ViewBuilder private var header: some View {
-        if state.sourceName != nil || state.hint != nil {
+        if state.sourceText != nil || state.hint != nil {
             HStack(spacing: 6) {
-                if let name = state.sourceName {
+                if let source = state.sourceText {
                     if let icon = state.sourceIcon {
                         Image(nsImage: icon).resizable().frame(width: 16, height: 16)
                     }
-                    Text("von \(name)").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(source).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 if let hint = state.hint {
@@ -561,7 +596,14 @@ private struct StructuredURL: View {
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 HStack(spacing: 0) {
-                    Text(parts.host).fontWeight(.semibold).lineLimit(1).fixedSize()
+                    // Lange Hosts vorne kürzen („…evil.example“), damit die registrierbare Domain
+                    // sichtbar bleibt (§26.8); voller Host im Tooltip, die ganze URL für VoiceOver.
+                    Text(parts.host)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .layoutPriority(1)
+                        .help(parts.host)
                     Text(parts.rest).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             } else {

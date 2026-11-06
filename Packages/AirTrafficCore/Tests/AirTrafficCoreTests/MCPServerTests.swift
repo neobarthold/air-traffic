@@ -81,13 +81,18 @@ struct MCPServerTests {
         let result = try #require(created["result"])
         #expect(result["isError"] == false)
         #expect(result["structuredContent"]?["rule"]?["name"] == "Figma")
-        #expect(result["structuredContent"]?["check"]?["status"] == "wins")
+        // Neu angelegt → wartet auf Freigabe (§26.1); die Vorschau nach Freigabe greift.
+        #expect(result["structuredContent"]?["pendingApproval"] == true)
+        #expect(result["structuredContent"]?["check"]?["status"] == "pendingMatch")
+        #expect(result["structuredContent"]?["checkAfterApproval"]?["status"] == "wins")
         let text = try #require(result["content"]?.arrayValue?.first?["text"]?.stringValue)
         #expect(JSONValue.parse(text) == result["structuredContent"])
         #expect(try temp.load().rules.first?.name == "Figma")
 
+        // check_url ignoriert die wartende Regel.
         let check = try request(server, "tools/call", ["name": "check_url", "arguments": ["url": "https://www.figma.com/file/1"]])
-        #expect(check["result"]?["structuredContent"]?["decision"]?["matchedRule"]?["name"] == "Figma")
+        #expect(check["result"]?["structuredContent"]?["decision"]?["matchedRule"]?["name"] == "Alles Mögliche")
+        #expect(check["result"]?["structuredContent"]?["rules"]?.arrayValue?.first?["status"] == "pendingMatch")
     }
 
     @Test func toolsCallBusinessErrorIsToolError() throws {

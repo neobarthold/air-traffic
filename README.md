@@ -121,9 +121,12 @@ airtraffic rules delete 3f2a9c1e                        # UUID-Präfix ab 6 Zeic
 - Regeln ein und aus im selben JSON wie `config.json`; Ziel-Apps auch kurz als Name, Bundle-ID oder Pfad
   (`"action": {"type": "open", "app": "Google Chrome"}`). `airtraffic schema` beschreibt das Format mit Beispielen.
 - `--json` gibt alles maschinenlesbar aus, `--dry-run` zeigt eine Änderung, ohne zu schreiben.
-  Jede Änderung antwortet mit der Regel und einer Prüfung ihrer Test-URL.
+  Jede Änderung antwortet mit der Regel und einer Prüfung ihrer Test-URL (bei wartenden Regeln auch „nach Freigabe“).
+- **Neue Regeln und Änderungen an Umschreibungen oder Aktion warten auf deine Freigabe in der App** und wirken
+  bis dahin nicht (siehe [Sicherheit](#sicherheit)). Name, Bedingungen, Test-URL, Position und an/aus wirken sofort.
 - Vor jedem Schreiben legt `airtraffic` eine Sicherung unter `~/Library/Application Support/Air Traffic/backups/`
-  an (die letzten 30 bleiben). Ändern läuft koordiniert und atomar; die laufende App lädt die Regeln sofort neu.
+  an (alle der letzten 24 Stunden, höchstens 100, dazu je Tag die neueste und die älteste für 14 Tage).
+  Ändern läuft koordiniert und atomar; die laufende App lädt die Regeln sofort neu.
 - Browserliste, Standardaktion und KI-Einstellungen lassen sich nur lesen (`airtraffic browsers list`,
   `airtraffic settings`), nicht ändern.
 
@@ -196,8 +199,9 @@ Die Tests laufen ohne Netzwerk und ohne echte KI-Aufrufe (Fake-Clients und Fake-
 
 ## Debug-Schalter
 
-Alle Schalter starten ohne Fenster und beenden sich danach. `AIRTRAFFIC_CONFIG_PATH=<datei>` lenkt
-auf eine andere Konfiguration um.
+Nur im **Debug-Build** – der Release-Build kennt sie nicht und startet mit ihnen ganz normal. Alle Schalter
+starten ohne Fenster und beenden sich danach. `AIRTRAFFIC_CONFIG_PATH=<datei>` lenkt auf eine andere
+Konfiguration um.
 
 ```sh
 APP="build/Build/Products/Debug/Air Traffic.app/Contents/MacOS/Air Traffic"
@@ -237,6 +241,33 @@ an. Commit und Push macht es nicht – es druckt die Befehle dafür. Erst mit de
 sehen installierte Apps das Update. `project.yml` und `appcast.xml` erst committen, wenn das Skript ohne
 Fehler durchgelaufen ist.
 
+## Sicherheit
+
+![Regel wartet auf Freigabe](docs/images/rules-pending-light.png)
+
+- **Freigabe für Änderungen von außen:** Legt `airtraffic` oder ein KI-Agent über MCP eine Regel an oder ändert
+  Umschreibungen oder Aktion einer Regel, wird das nicht sofort wirksam. Die Regel bekommt in der Liste den
+  orangen Chip „Freigabe nötig“, die Fußleiste zählt wartende Regeln, und der Editor zeigt Vorher/Nachher mit
+  einer Vorschau für die Test-URL. Erst **Freigeben** macht die Änderung wirksam; **Verwerfen** stellt den vorherigen
+  Stand wieder her bzw. löscht eine neu angelegte Regel. Bis dahin gilt der zuletzt freigegebene Stand – auch für
+  `check` und die URL-Prüfung. Agenten können nicht freigeben (kein Befehl, kein Tool). Nach jeder Änderung von
+  außen erscheint eine Mitteilung „Regeln von außen geändert“; ohne Mitteilungs-Berechtigung bleibt die orange
+  Zeile im Einstellungsfenster.
+- **Ziel sichtbar:** Kurzbeschreibungen zeigen bei Umschreibungen das Ziel (z. B. „↻ review.example.com“).
+- **Schema-Regel:** Nach dem Umschreiben ist nur `http`/`https` erlaubt, das Schema der Original-URL oder ein
+  Schema, das literal am Anfang der Vorlage steht (`linear://…`). Ein Schema aus der URL selbst (`?u=file:///…`
+  über `$1`) wird verworfen – dann gilt die Original-URL mit Warnung. `file:` öffnet Air Traffic nur, wenn der
+  Link schon `file:` war.
+- **Grenzen gegen Hänger:** Links über 8192 Zeichen prüft Air Traffic nicht gegen Regeln (Auswahlfenster mit
+  Hinweis). Platzhalter-Muster laufen ohne reguläre Ausdrücke in linearer Zeit; reguläre Ausdrücke haben je Link
+  zusammen höchstens 500 ms – danach gilt die Regel als „trifft nicht“.
+- **Auswahlfenster:** höchstens 5 wartende Links (gleiche zusammengefasst), Ziffern und ⏎ wirken erst 300 ms nach
+  dem Erscheinen, `airtraffic://…&prompt=1` höchstens 3-mal in 10 s, lange Hosts werden vorne gekürzt
+  (`…evil.example`). Kreist ein Link (dieselbe URL mehr als 3-mal in 5 s), fragt Air Traffic nach.
+- **`airtraffic://`:** `source` wird nur als `com.apple.Safari` übernommen. Kommt der Link nicht von der eigenen
+  Safari-Erweiterung, steht im Auswahlfenster „über airtraffic://-Link“ statt „von Safari“.
+- **KI-CLI:** Ein eigener Pfad für Claude Code bzw. Codex gilt nur, wenn die Datei `claude` bzw. `codex` heißt.
+
 ## Datenschutz
 
 - Air Traffic sendet Links nirgendwohin: Regeln, Umschreibungen und Tests laufen lokal.
@@ -250,9 +281,13 @@ Fehler durchgelaufen ist.
 - `airtraffic` und der MCP-Server arbeiten nur lokal mit der Konfigurationsdatei: kein Netzwerk, kein
   Schlüsselbund, sie öffnen keine Links und ändern nicht den Standardbrowser. Was ein KI-Agent über den
   MCP-Server liest (deine Regeln), sieht natürlich auch dessen Anbieter.
+- Das Systemprotokoll enthält keine URLs im Klartext: Links, Warnungen der Regeln und Fehlermeldungen mit
+  URL-Teilen sind als privat markiert. Lesbar bleiben nur Bundle-IDs, App-Pfade, Zähler und Regelnamen.
+- Codex läuft für den KI-Assistenten in einer nur lesenden Sandbox; es darf dabei Dateien lesen. Die Anfrage
+  weist es an, keine Werkzeuge oder Shell zu nutzen und nur JSON zu antworten.
 
-Konfiguration: `~/Library/Application Support/Air Traffic/config.json`, Sicherungen der letzten 30
-Änderungen über `airtraffic` im Ordner `backups/` daneben.
+Konfiguration: `~/Library/Application Support/Air Traffic/config.json`, Sicherungen vor Änderungen über
+`airtraffic` im Ordner `backups/` daneben (alle der letzten 24 Stunden, je Tag die neueste und älteste für 14 Tage).
 
 ## Lizenz
 

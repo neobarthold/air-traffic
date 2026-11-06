@@ -121,11 +121,18 @@ public struct CodexCLIClient: LLMClient {
         return args
     }
 
-    /// System und Gespräch in einem Prompt (Codex kennt keinen getrennten Systemprompt im `exec`-Modus).
+    /// Klare Anweisung vorweg (§26.6): Codex ist ein Agent mit Werkzeugen; hier soll er nur antworten.
+    public static let toolInstruction = """
+        IMPORTANT: Do not use any tools. Do not run shell commands, do not read, list, search or write files, \
+        and do not browse. Everything you need is in this message. Reply only with the requested JSON object, nothing else.
+        """
+
+    /// System und Gespräch in einem Prompt (Codex kennt keinen getrennten Systemprompt im `exec`-Modus),
+    /// mit `toolInstruction` vorweg.
     public static func prompt(for messages: [ChatMessage]) -> String {
         let (system, prompt) = CLIPrompt.split(messages)
-        guard !system.isEmpty else { return prompt }
-        return "\(system)\n\n---\n\n\(prompt)"
+        guard !system.isEmpty else { return "\(toolInstruction)\n\n---\n\n\(prompt)" }
+        return "\(toolInstruction)\n\n\(system)\n\n---\n\n\(prompt)"
     }
 
     public func complete(_ request: LLMRequest) async throws -> String {

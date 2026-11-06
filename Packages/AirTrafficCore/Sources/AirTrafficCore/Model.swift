@@ -319,6 +319,9 @@ public struct Rule: Codable, Sendable, Equatable, Identifiable {
     public var action: Action
     /// Test-URL für den Abschnitt „Test“ im Regel-Editor (§14). Optional: fehlt = nil, wird bei nil nicht geschrieben.
     public var testURL: String?
+    /// Änderung von außen (CLI/MCP) an Umschreibungen oder Aktion, die noch in der App freigegeben
+    /// werden muss (§26.1). Optional: fehlt = freigegeben, wird bei nil nicht geschrieben.
+    public var pendingChange: PendingChange?
 
     public init(
         id: UUID = UUID(),
@@ -328,7 +331,8 @@ public struct Rule: Codable, Sendable, Equatable, Identifiable {
         conditions: [Condition] = [],
         rewrites: [Rewrite] = [],
         action: Action = .prompt(.all),
-        testURL: String? = nil
+        testURL: String? = nil,
+        pendingChange: PendingChange? = nil
     ) {
         self.id = id
         self.name = name
@@ -338,10 +342,11 @@ public struct Rule: Codable, Sendable, Equatable, Identifiable {
         self.rewrites = rewrites
         self.action = action
         self.testURL = testURL
+        self.pendingChange = pendingChange
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, enabled, match, conditions, rewrites, action, testURL
+        case id, name, enabled, match, conditions, rewrites, action, testURL, pendingChange
     }
 
     public init(from decoder: any Decoder) throws {
@@ -354,6 +359,82 @@ public struct Rule: Codable, Sendable, Equatable, Identifiable {
         rewrites = try c.decodeIfPresent([Rewrite].self, forKey: .rewrites) ?? []
         action = try c.decode(Action.self, forKey: .action)
         testURL = try c.decodeIfPresent(String.self, forKey: .testURL)
+        pendingChange = try c.decodeIfPresent(PendingChange.self, forKey: .pendingChange)
+    }
+
+    /// Stand, den die Engine auswertet (§26.1): ohne wartende Änderung die Regel selbst; neu angelegt und
+    /// wartend → `nil` (übersprungen); geändert und wartend → der zuletzt freigegebene Stand, mit dem
+    /// aktuellen An/Aus (bleibt sofort wirksam).
+    public var effective: Rule? {
+        guard let pendingChange else { return self }
+        guard var previous = pendingChange.previous else { return nil }
+        previous.id = id
+        previous.enabled = enabled
+        previous.pendingChange = nil
+        return previous
+    }
+
+    /// Wartet auf Freigabe in der App.
+    public var isPendingApproval: Bool { pendingChange != nil }
+}
+
+// MARK: - Freigabe (§26.1)
+
+/// Änderung von außen an Umschreibungen oder Aktion, die erst nach Freigabe in der App wirkt.
+public struct PendingChange: Codable, Sendable, Equatable {
+    /// Seit wann die Änderung wartet (erste noch nicht freigegebene Änderung).
+    public var since: Date
+    /// Kurzer Grund, z. B. „Umschreibungen geändert“.
+    public var reason: String
+    /// Array statt Optional, weil `Rule` sonst sich selbst enthielte (Wertetyp ohne Indirektion).
+    private var previousStorage: [Rule]
+
+    /// Vollständiger zuletzt freigegebener Stand; `nil` = neu angelegt.
+    public var previous: Rule? {
+        get { previousStorage.first }
+        set {
+            guard var rule = newValue else { previousStorage = []; return }
+            rule.pendingChange = nil
+            previousStorage = [rule]
+        }
+    }
+
+    public init(since: Date, reason: String, previous: Rule?) {
+        self.since = since
+        self.reason = reason
+        self.previousStorage = []
+        self.previous = previous
+    }
+
+    private enum CodingKeys: String, CodingKey { case since, reason, previous }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let text = try? c.decode(String.self, forKey: .since), let date = PendingChange.parseDate(text) {
+            since = date
+        } else {
+            since = try c.decode(Date.self, forKey: .since)
+        }
+        reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        previousStorage = []
+        previous = try c.decodeIfPresent(Rule.self, forKey: .previous)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        // ISO 8601 statt Sekunden seit 2001 – lesbar in config.json.
+        try c.encode(PendingChange.formatDate(since), forKey: .since)
+        try c.encode(reason, forKey: .reason)
+        try c.encodeIfPresent(previous, forKey: .previous)
+    }
+
+    static func formatDate(_ date: Date) -> String {
+        Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
+    }
+
+    static func parseDate(_ text: String) -> Date? {
+        (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text))
+            ?? (try? Date.ISO8601FormatStyle().parse(text))
     }
 }
 

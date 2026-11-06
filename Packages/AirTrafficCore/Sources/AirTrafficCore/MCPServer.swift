@@ -9,7 +9,10 @@ public struct MCPServer: Sendable {
     public static let instructions = """
         Air Traffic leitet Links nach Regeln an Browser und Apps weiter. Rufe zuerst describe_rule_format und list_rules auf; \
         die Regeln werden von oben nach unten geprüft, die erste aktive passende gewinnt. \
-        Prüfe jede Änderung mit check_url (oder einer testURL in der Regel) – vor jedem Schreiben legt Air Traffic eine Sicherung an.
+        Prüfe jede Änderung mit check_url (oder einer testURL in der Regel) – vor jedem Schreiben legt Air Traffic eine Sicherung an. \
+        Neue Regeln und Änderungen an rewrites oder action warten auf Freigabe durch den Nutzer in der App (pendingApproval: true) \
+        und wirken bis dahin nicht; Name, Bedingungen, testURL, Position und an/aus wirken sofort. Freigeben kann nur der Nutzer – \
+        es gibt dafür kein Tool, und pendingChange in Eingaben wird abgelehnt.
         """
 
     public let api: AgentAPI
@@ -287,7 +290,7 @@ enum MCPTools {
         MCPTool(
             name: "list_rules",
             title: "Regeln auflisten",
-            description: "Alle Regeln in Prüfreihenfolge mit Position, id, Name, aktiv und Kurzbeschreibung. Oben gewinnt.",
+            description: "Alle Regeln in Prüfreihenfolge mit Position, id, Name, aktiv, Kurzbeschreibung (mit Ziel von Umschreibungen) und pendingApproval. Oben gewinnt.",
             inputSchema: object([:]),
             annotations: readOnly("Regeln auflisten"),
             run: { api, args in
@@ -309,7 +312,7 @@ enum MCPTools {
         MCPTool(
             name: "create_rule",
             title: "Regel anlegen",
-            description: "Legt eine Regel an (Standard: ans Ende, sonst an position). action.app darf ein App-Name, eine Bundle-ID oder ein Pfad sein. Antwortet mit der Regel und einer Prüfung ihrer testURL.",
+            description: "Legt eine Regel an (Standard: ans Ende, sonst an position). action.app darf ein App-Name, eine Bundle-ID oder ein Pfad sein. Die neue Regel wartet auf Freigabe durch den Nutzer in Air Traffic und wirkt erst danach. Antwortet mit der Regel und einer Prüfung ihrer testURL (vorher und nach Freigabe).",
             inputSchema: object([
                 "rule": object(ruleProperties, required: ["name", "action"]),
                 "position": ["type": "integer", "minimum": 1, "description": "Einfügeposition (1-basiert); Standard: ans Ende"],
@@ -324,7 +327,7 @@ enum MCPTools {
         MCPTool(
             name: "update_rule",
             title: "Regel ändern",
-            description: "Ändert eine Regel: Felder aus changes ersetzen die bisherigen; conditions und rewrites immer als ganze Liste angeben. testURL: null entfernt die Test-URL, position verschiebt.",
+            description: "Ändert eine Regel: Felder aus changes ersetzen die bisherigen; conditions und rewrites immer als ganze Liste angeben. testURL: null entfernt die Test-URL, position verschiebt. Änderungen an rewrites oder action warten auf Freigabe durch den Nutzer in Air Traffic.",
             inputSchema: object([
                 "ref": ref,
                 "changes": object(ruleProperties),
@@ -354,7 +357,7 @@ enum MCPTools {
         MCPTool(
             name: "set_rule_enabled",
             title: "Regel an/aus",
-            description: "Schaltet eine Regel an oder aus.",
+            description: "Schaltet eine Regel an oder aus. Eine Regel, die auf Freigabe wartet, wird dadurch nicht wirksam.",
             inputSchema: object([
                 "ref": ref,
                 "enabled": ["type": "boolean"],

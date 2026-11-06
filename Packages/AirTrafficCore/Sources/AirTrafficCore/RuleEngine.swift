@@ -34,18 +34,30 @@ public struct RuleTestResult: Sendable, Equatable {
 }
 
 /// Reine, testbare Entscheidungslogik: erste aktivierte, passende Regel → Rewrites → Aktion.
+///
+/// Laufzeit-Schutz (§26.3): URLs über `MatchLimits.maxURLLength` werden nicht geprüft; reguläre
+/// Ausdrücke teilen sich je Link ein Zeitbudget. Wartende Änderungen von außen (§26.1) gelten nicht:
+/// ausgewertet wird `Rule.effective`.
 public enum RuleEngine {
     public static func decide(url: URL, context: LinkContext, config: Config) -> Decision {
+        if MatchLimits.isTooLong(url) {
+            return Decision(
+                originalURL: url, finalURL: url, matchedRuleID: nil,
+                action: .prompt(.all), warnings: [MatchLimits.tooLongWarning]
+            )
+        }
+        let budget = MatchBudget()
         var warnings: [String] = []
 
-        for rule in config.rules where rule.enabled {
+        for stored in config.rules {
+            guard let rule = stored.effective, rule.enabled else { continue }
             var ruleWarnings: [String] = []
-            guard matches(rule: rule, url: url, context: context, warnings: &ruleWarnings) else {
+            guard matches(rule: rule, url: url, context: context, warnings: &ruleWarnings, budget: budget) else {
                 warnings += ruleWarnings
                 continue
             }
             warnings += ruleWarnings
-            let rewritten = Rewriter.apply(rule.rewrites, to: url)
+            let rewritten = Rewriter.apply(rule.rewrites, to: url, budget: budget)
             warnings += rewritten.warnings.map { "Regel „\(rule.name)“: \($0)" }
             return Decision(
                 originalURL: url,
@@ -66,14 +78,16 @@ public enum RuleEngine {
     }
 
     /// Testet eine einzelne Regel für den Abschnitt „Test“ im Regel-Editor (§14.3).
-    /// Wertet `rule` unabhängig von `enabled` aus. `rewriteSteps` und `finalURL` zeigen,
-    /// was die Umschreibungen ergeben – unabhängig davon, ob die Bedingungen passen.
+    /// Wertet `rule` unabhängig von `enabled` und einer wartenden Freigabe aus (Vorschau des Stands
+    /// im Editor). `rewriteSteps` und `finalURL` zeigen, was die Umschreibungen ergeben – unabhängig
+    /// davon, ob die Bedingungen passen.
     public static func test(rule: Rule, url: URL, context: LinkContext, config: Config) -> RuleTestResult {
+        let budget = MatchBudget()
         var warnings: [String] = []
 
         let conditionResults = rule.conditions.enumerated().map { index, condition in
             var message: String?
-            let result = evaluate(condition, url: url, context: context, error: &message)
+            let result = evaluate(condition, url: url, context: context, error: &message, budget: budget)
             if let message { warnings.append("Bedingung \(index + 1): \(message)") }
             return result
         }
@@ -83,17 +97,20 @@ public enum RuleEngine {
         var rewriteSteps: [String] = []
         var current = url.absoluteString
         for rewrite in rule.rewrites {
-            if let next = try? Rewriter.apply(rewrite, to: current) { current = next }
+            if let next = try? Rewriter.apply(rewrite, to: current, budget: budget) { current = next }
             rewriteSteps.append(current)
         }
-        let rewritten = Rewriter.apply(rule.rewrites, to: url)
+        let rewritten = Rewriter.apply(rule.rewrites, to: url, budget: budget)
         warnings += rewritten.warnings
+        warnings += rewritten.notes
 
         // Erste frühere aktivierte Regel, die trifft (wie `decide` mit voller Config).
         var shadowedBy: UUID?
         if let ownIndex = config.rules.firstIndex(where: { $0.id == rule.id }) {
-            shadowedBy = config.rules[..<ownIndex].first { earlier in
-                earlier.enabled && Self.matches(rule: earlier, url: url, context: context)
+            shadowedBy = config.rules[..<ownIndex].first { stored in
+                guard let earlier = stored.effective, earlier.enabled else { return false }
+                var ignored: [String] = []
+                return Self.matches(rule: earlier, url: url, context: context, warnings: &ignored, budget: budget)
             }?.id
         }
 
@@ -110,16 +127,22 @@ public enum RuleEngine {
     /// Prüft, ob die Bedingungen einer Regel passen (ignoriert `enabled`).
     public static func matches(rule: Rule, url: URL, context: LinkContext) -> Bool {
         var ignored: [String] = []
-        return matches(rule: rule, url: url, context: context, warnings: &ignored)
+        return matches(rule: rule, url: url, context: context, warnings: &ignored, budget: MatchBudget())
     }
 
-    static func matches(rule: Rule, url: URL, context: LinkContext, warnings: inout [String]) -> Bool {
+    /// Zeitlimit überschritten → Regel gilt als „trifft nicht“ (§26.3).
+    static func matches(
+        rule: Rule, url: URL, context: LinkContext, warnings: inout [String], budget: MatchBudget?
+    ) -> Bool {
         if rule.conditions.isEmpty { return true }
         var results: [Bool] = []
         for condition in rule.conditions {
             var message: String?
-            results.append(evaluate(condition, url: url, context: context, error: &message))
-            if let message { warnings.append("Regel „\(rule.name)“: \(message)") }
+            results.append(evaluate(condition, url: url, context: context, error: &message, budget: budget))
+            if let message {
+                warnings.append("Regel „\(rule.name)“: \(message)")
+                if message == TextMatcher.timeoutMessage { return false }
+            }
         }
         return combine(results, mode: rule.match)
     }
@@ -136,17 +159,19 @@ public enum RuleEngine {
 
     public static func evaluate(_ condition: Condition, url: URL, context: LinkContext) -> Bool {
         var ignored: String?
-        return evaluate(condition, url: url, context: context, error: &ignored)
+        return evaluate(condition, url: url, context: context, error: &ignored, budget: MatchBudget())
     }
 
-    static func evaluate(_ condition: Condition, url: URL, context: LinkContext, error: inout String?) -> Bool {
+    static func evaluate(
+        _ condition: Condition, url: URL, context: LinkContext, error: inout String?, budget: MatchBudget?
+    ) -> Bool {
         switch condition {
         case .url(let m):
-            return TextMatcher.matches(m, url.absoluteString, problem: &error)
+            return TextMatcher.matches(m, url.absoluteString, problem: &error, budget: budget)
         case .host(let m):
-            return TextMatcher.matches(m, url.host(percentEncoded: false) ?? "", problem: &error)
+            return TextMatcher.matches(m, url.host(percentEncoded: false) ?? "", problem: &error, budget: budget)
         case .path(let m):
-            return TextMatcher.matches(m, url.path(percentEncoded: false), problem: &error)
+            return TextMatcher.matches(m, url.path(percentEncoded: false), problem: &error, budget: budget)
         case .sourceApp(let bundleIdentifier, let negated):
             let isSource = context.sourceBundleIdentifier.map {
                 $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
@@ -162,12 +187,14 @@ public enum RuleEngine {
 
 /// Textvergleiche für `TextMatch`.
 public enum TextMatcher {
+    static let timeoutMessage = "Zeitlimit überschritten"
+
     public static func matches(_ m: TextMatch, _ subject: String) -> Bool {
         var ignored: String?
-        return matches(m, subject, problem: &ignored)
+        return matches(m, subject, problem: &ignored, budget: MatchBudget())
     }
 
-    static func matches(_ m: TextMatch, _ subject: String, problem: inout String?) -> Bool {
+    static func matches(_ m: TextMatch, _ subject: String, problem: inout String?, budget: MatchBudget?) -> Bool {
         let options: String.CompareOptions = m.caseSensitive ? [] : [.caseInsensitive]
         switch m.op {
         case .equals:
@@ -184,17 +211,20 @@ public enum TextMatcher {
             return m.value.isEmpty
                 || subject.range(of: m.value, options: options.union([.anchored, .backwards])) != nil
         case .wildcard:
-            guard let regex = try? wildcardRegex(m.value, caseSensitive: m.caseSensitive) else { return false }
-            return regex.firstMatch(in: subject, range: NSRange(subject.startIndex..., in: subject)) != nil
+            // Ohne Regex: linear, ohne Backtracking-Explosion (§26.3).
+            return WildcardPattern(m.value, caseSensitive: m.caseSensitive).matches(subject)
         case .regex:
+            let regex: NSRegularExpression
             do {
-                let regex = try NSRegularExpression(
-                    pattern: m.value,
-                    options: m.caseSensitive ? [] : [.caseInsensitive]
-                )
-                return regex.firstMatch(in: subject, range: NSRange(subject.startIndex..., in: subject)) != nil
+                regex = try RegexCache.regex(m.value, options: m.caseSensitive ? [] : [.caseInsensitive])
             } catch {
                 problem = "ungültiger regulärer Ausdruck „\(m.value)“"
+                return false
+            }
+            do {
+                return try regex.firstMatch(in: subject, budget: budget) != nil
+            } catch {
+                problem = timeoutMessage
                 return false
             }
         }
@@ -208,7 +238,8 @@ public enum TextMatcher {
         needle.isEmpty || subject.range(of: needle, options: options) != nil
     }
 
-    /// `*` und `?` wie NSPredicate `LIKE` (ganzer String), `\` maskiert das nächste Zeichen.
+    /// Bisherige Umsetzung von `wildcard` als regulärer Ausdruck (`*` → `.*`, `?` → `.`, ganzer String).
+    /// Nur noch Referenz für Äquivalenztests; der Abgleich nutzt `WildcardPattern`.
     public static func wildcardRegex(_ pattern: String, caseSensitive: Bool) throws -> NSRegularExpression {
         var regex = "^"
         var escaping = false

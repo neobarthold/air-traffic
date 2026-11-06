@@ -1,3 +1,5 @@
+// Debug-Schalter: nur im Debug-Build (§26.5); der Release-Build kennt den Befehl nicht.
+#if DEBUG
 import AirTrafficCore
 import Foundation
 
@@ -143,3 +145,4 @@ enum SuggestRegexCommand {
         return 1
     }
 }
+#endif

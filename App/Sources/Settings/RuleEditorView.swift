@@ -61,6 +61,15 @@ struct RuleEditorView: View {
         }
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if let pending = rule.pendingChange {
+                    PendingApprovalCard(
+                        rule: rule,
+                        pending: pending,
+                        testURL: testURL,
+                        onApprove: { model.approveRule(rule.id) },
+                        onDiscard: { model.discardPendingChange(rule.id) }
+                    )
+                }
                 header
                 pipeline(result)
             }
@@ -296,6 +305,9 @@ struct RuleEditorView: View {
                     if !rule.enabled {
                         StatusPill(.neutral, "Regel ist aus – Test läuft trotzdem").fixedSize()
                     }
+                    if rule.isPendingApproval {
+                        StatusPill(.warning, "Vorschau – wirkt erst nach Freigabe", symbol: "clock").fixedSize()
+                    }
                     Spacer(minLength: 0)
                 }
                 if let shadowRule, let shadowIndex = model.config.rules.firstIndex(where: { $0.id == shadowRule.id }) {
@@ -340,7 +352,8 @@ struct RuleEditorView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 12, weight: .semibold))
                 .accessibilityHidden(true)
-            Text("Bei einem echten Klick greift zuerst \(emphasized) und \(actionPhrase(other.action)). Diese Regel wird für diese URL nie erreicht.")
+            // Wirksamer Stand: bei wartender Änderung die freigegebene Aktion (§26.1).
+            Text("Bei einem echten Klick greift zuerst \(emphasized) und \(actionPhrase((other.effective ?? other).action)). Diese Regel wird für diese URL nie erreicht.")
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: 8)
@@ -457,6 +470,177 @@ struct RuleEditorView: View {
             text = next
         }
         return [text]
+    }
+}
+
+// MARK: - Freigabe (§26.1)
+
+/// Orange Karte oben im Editor: Änderung von außen mit Vorher/Nachher, Ergebnis-Vorschau und
+/// „Freigeben“/„Verwerfen“. Bearbeiten in der App gibt nicht frei – nur der Knopf.
+private struct PendingApprovalCard: View {
+    let rule: Rule
+    let pending: PendingChange
+    let testURL: URL?
+    let onApprove: () -> Void
+    let onDiscard: () -> Void
+
+    private var previous: Rule? { pending.previous }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Von außen geändert – wartet auf Freigabe")
+                        .font(DS.cardTitle)
+                    Text("\(pending.reason) · seit \(pending.since.formatted(date: .abbreviated, time: .shortened))")
+                        .font(DS.small)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+            }
+            .foregroundStyle(DS.orange)
+
+            Text(previous == nil
+                 ? "Diese Regel wurde über die Kommandozeile oder einen KI-Agenten angelegt. Sie gilt erst, wenn du sie freigibst."
+                 : "Umschreibungen oder Aktion wurden über die Kommandozeile oder einen KI-Agenten geändert. Bis zur Freigabe gilt der vorherige Stand.")
+                .font(DS.help)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Grid(alignment: .topLeading, horizontalSpacing: 10, verticalSpacing: 6) {
+                GridRow {
+                    Text("").gridColumnAlignment(.leading)
+                    columnTitle("Vorher")
+                    columnTitle("Nachher")
+                }
+                Divider().gridCellUnsizedAxes(.horizontal)
+                GridRow {
+                    rowTitle("Umschreiben")
+                    rewrites(previous?.rewrites, isNew: previous == nil)
+                    rewrites(rule.rewrites, isNew: false)
+                        .modifier(ChangedMark(changed: previous?.rewrites != rule.rewrites))
+                }
+                GridRow {
+                    rowTitle("Öffnen")
+                    action(previous?.action)
+                    action(rule.action)
+                        .modifier(ChangedMark(changed: previous?.action != rule.action))
+                }
+                if let testURL {
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    GridRow {
+                        rowTitle("Test-URL")
+                        preview(previous, url: testURL)
+                        preview(rule, url: testURL)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(previous == nil ? "Verwerfen (Regel löschen)" : "Verwerfen", role: .destructive, action: onDiscard)
+                    .help(previous == nil ? "Neue Regel löschen" : "Vorherigen Stand wiederherstellen")
+                Button("Freigeben", action: onApprove)
+                    .buttonStyle(.borderedProminent)
+                    .tint(DS.orange)
+                    .help("Änderung übernehmen – gilt danach für echte Links")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.cardRadius).fill(DS.orange.opacity(DS.tint)))
+        .overlay(RoundedRectangle(cornerRadius: DS.cardRadius).strokeBorder(DS.orange.opacity(0.55), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Von außen geändert – wartet auf Freigabe")
+    }
+
+    private func columnTitle(_ text: String) -> some View {
+        Text(text).font(DS.small.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func rowTitle(_ text: String) -> some View {
+        Text(text).font(DS.small).foregroundStyle(.secondary).frame(width: 82, alignment: .leading)
+    }
+
+    @ViewBuilder private func rewrites(_ list: [Rewrite]?, isNew: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if isNew {
+                Text("– (neu angelegt)").font(DS.help).foregroundStyle(.secondary)
+            } else if let list, !list.isEmpty {
+                ForEach(Array(list.enumerated()), id: \.offset) { _, rewrite in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(rewrite.pattern).font(DS.monoSmall)
+                        Text("→ \(rewrite.template)").font(DS.monoSmall).foregroundStyle(.primary)
+                    }
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("keine").font(DS.help).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func action(_ action: Action?) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if let action {
+                Text(ActionText.describe(action)).font(DS.help)
+                if let path = Self.appPath(action) {
+                    Text(path).font(DS.monoSmall).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            } else {
+                Text("–").font(DS.help).foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func preview(_ rule: Rule?, url: URL) -> some View {
+        Group {
+            if let rule {
+                let output = Rewriter.apply(rule.rewrites, to: url)
+                VStack(alignment: .leading, spacing: 2) {
+                    ActionText.opens(rule.action, url: output.url)
+                    ForEach(output.warnings, id: \.self) { warning in
+                        Text(warning).foregroundStyle(DS.red)
+                    }
+                }
+            } else {
+                Text("Regel gilt nicht").foregroundStyle(.secondary)
+            }
+        }
+        .font(DS.help)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func appPath(_ action: Action) -> String? {
+        switch action {
+        case .open(let app): app.path.isEmpty ? app.bundleIdentifier : app.path
+        case .openFirstRunning(let fallback?): fallback.path.isEmpty ? fallback.bundleIdentifier : fallback.path
+        case .openFirstRunning(nil), .prompt: nil
+        }
+    }
+}
+
+/// Hebt geänderte Werte in der Spalte „Nachher“ hervor.
+private struct ChangedMark: ViewModifier {
+    let changed: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(changed ? 4 : 0)
+            .background {
+                if changed { RoundedRectangle(cornerRadius: 5).fill(DS.orange.opacity(0.12)) }
+            }
+            .accessibilityHint(changed ? "geändert" : "")
     }
 }
 

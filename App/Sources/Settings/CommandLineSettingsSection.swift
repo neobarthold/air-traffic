@@ -48,7 +48,7 @@ struct CommandLineSettingsSection: View {
                 Divider().padding(.leading, 12)
                 commandRow(title: "Codex", command: CommandLineInstall.codexCommand)
                 Divider().padding(.leading, 12)
-                Text("Mit dem Befehl „airtraffic“ und als MCP-Server können KI-Agenten wie Claude Code oder Codex deine Regeln auflisten, URLs prüfen und Regeln anlegen, ändern, umsortieren oder löschen – mit derselben Logik wie diese App. Vor jeder Änderung legt Air Traffic eine Sicherung der Konfiguration an (Ordner „backups“, die letzten 30); geänderte Regeln erscheinen hier sofort.")
+                Text("Mit dem Befehl „airtraffic“ und als MCP-Server können KI-Agenten wie Claude Code oder Codex deine Regeln auflisten, URLs prüfen und Regeln anlegen, ändern, umsortieren oder löschen – mit derselben Logik wie diese App. Vor jeder Änderung legt Air Traffic eine Sicherung der Konfiguration an (Ordner „backups“); geänderte Regeln erscheinen hier sofort. Neue Regeln und Änderungen an Umschreibungen oder Aktion wirken erst, wenn du sie im Tab „Regeln“ freigibst.")
                     .font(DS.help)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

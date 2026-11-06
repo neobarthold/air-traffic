@@ -3,10 +3,20 @@ import Foundation
 // Getrennt von `AirTrafficURL.swift`, weil jene Datei auch in die Safari-Erweiterung kompiliert wird
 // und dort weder `RuleEngine` noch `Config` existieren.
 extension AirTrafficURL.Request {
-    /// Kontext für die Regeln: `source` ersetzt die per Absender-PID ermittelte Quell-App.
+    /// Einziger erlaubter Wert für `source` – den setzt die eigene Safari-Erweiterung (§26.4).
+    public static let trustedSource = "com.apple.Safari"
+
+    /// `source` ist gesetzt, aber nicht erlaubt (wird ignoriert, Warnung im Log).
+    public var hasUntrustedSource: Bool {
+        guard let source else { return false }
+        return source != Self.trustedSource
+    }
+
+    /// Kontext für die Regeln: `source` ersetzt die per Absender-PID ermittelte Quell-App – aber nur,
+    /// wenn es `com.apple.Safari` ist; andere Werte werden ignoriert (§26.4).
     public func context(from base: LinkContext) -> LinkContext {
         var context = base
-        if let source { context.sourceBundleIdentifier = source }
+        if let source, source == Self.trustedSource { context.sourceBundleIdentifier = source }
         return context
     }
 }
@@ -21,6 +31,10 @@ extension AirTrafficURL {
     /// - Sonst ohne Regeln: Link unverändert, Aktion `fallbackAction` bzw. globale Standardaktion.
     public static func decide(_ request: Request, context: LinkContext, config: Config) -> Decision {
         let ruleContext = request.context(from: context)
+        // Zu lang für Regeln (§26.3): Auswahl mit Hinweis, unabhängig von den Erweiterungs-Einstellungen.
+        if MatchLimits.isTooLong(request.url) {
+            return RuleEngine.decide(url: request.url, context: ruleContext, config: config)
+        }
         if request.prompt {
             var decision = RuleEngine.decide(url: request.url, context: ruleContext, config: config)
             decision.action = .prompt(.all)

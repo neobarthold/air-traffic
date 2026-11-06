@@ -1,11 +1,14 @@
 import AppKit
 
-// Debug-Schalter: `--decide <url> [--source <bundleID>]` → Decision als JSON, kein Fenster.
+// Debug-Schalter (`--decide`, `--suggest-regex`, `--snapshot`) gibt es nur im Debug-Build (§26.5).
+// Der Release-Build ignoriert sie und startet normal.
+#if DEBUG
+// `--decide <url> [--source <bundleID>]` → Decision als JSON, kein Fenster.
 if CommandLine.arguments.contains(DecideCommand.flag) {
     exit(DecideCommand.run(arguments: CommandLine.arguments))
 }
 
-// Debug-Schalter: `--suggest-regex "<Beschreibung>" --example <url> … [--mode rewrite|condition] [--provider openrouter|claude|codex]`
+// `--suggest-regex "<Beschreibung>" --example <url> … [--mode rewrite|condition] [--provider openrouter|claude|codex]`
 // → geprüfter Regex-Vorschlag als JSON, kein Fenster.
 if CommandLine.arguments.contains(SuggestRegexCommand.flag) {
     Task { @MainActor in
@@ -14,7 +17,7 @@ if CommandLine.arguments.contains(SuggestRegexCommand.flag) {
     dispatchMain()
 }
 
-// Debug-Schalter: `--snapshot <dir>` → PNGs von Chooser und Einstellungen (hell/dunkel), kein sichtbares Fenster.
+// `--snapshot <dir>` → PNGs von Chooser und Einstellungen (hell/dunkel), kein sichtbares Fenster.
 if CommandLine.arguments.contains(SnapshotCommand.flag) {
     let app = NSApplication.shared
     app.setActivationPolicy(.prohibited)
@@ -23,6 +26,7 @@ if CommandLine.arguments.contains(SnapshotCommand.flag) {
     }
     app.run()
 }
+#endif
 
 let app = NSApplication.shared
 // `NSApplication.delegate` ist weak – die Instanz lebt als globale Konstante.

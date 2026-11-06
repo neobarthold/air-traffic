@@ -149,8 +149,11 @@ struct AssistantCLITests {
     }
 
     @Test func codexPromptCombinesSystemAndUser() {
-        #expect(CodexCLIClient.prompt(for: [.system("SYS"), .user("Frage")]) == "SYS\n\n---\n\nFrage")
-        #expect(CodexCLIClient.prompt(for: [.user("Frage")]) == "Frage")
+        let tools = CodexCLIClient.toolInstruction
+        #expect(CodexCLIClient.prompt(for: [.system("SYS"), .user("Frage")]) == "\(tools)\n\nSYS\n\n---\n\nFrage")
+        #expect(CodexCLIClient.prompt(for: [.user("Frage")]) == "\(tools)\n\n---\n\nFrage")
+        // Klare Anweisung ohne Werkzeuge/Shell, nur JSON (§26.6).
+        #expect(tools.contains("Do not use any tools") && tools.contains("shell") && tools.contains("JSON"))
     }
 
     // MARK: Claude: Antwort
@@ -264,7 +267,7 @@ struct AssistantCLITests {
         let dir = try #require(call.invocation.currentDirectory)
         #expect(call.invocation.executable.path == "/usr/local/bin/codex")
         #expect(call.invocation.arguments == CodexCLIClient.arguments(model: "", directory: dir, hasSchema: true))
-        #expect(call.stdinText == "SYS\n\n---\n\nFrage")
+        #expect(call.stdinText == "\(CodexCLIClient.toolInstruction)\n\nSYS\n\n---\n\nFrage")
         let schema = try #require(call.files[CodexCLIClient.schemaFileName])
         #expect(try JSONDecoder().decode(JSONValue.self, from: Data(schema.utf8)) == RegexAssistant.responseSchema.schema)
         #expect(!FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)))

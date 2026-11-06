@@ -1,3 +1,4 @@
+import AirTrafficCore
 import AppKit
 import SwiftUI
 
@@ -150,10 +151,17 @@ final class SettingsTabViewController: NSTabViewController {
 struct ExternalChangeBanner: View {
     let model: AppModel
 
+    /// Mit Zähler wartender Regeln (§26.1) – auch ohne Mitteilungs-Berechtigung sichtbar.
+    private var text: String {
+        let base = "Regeln wurden von außen geändert und neu geladen."
+        let pending = model.pendingRuleCount
+        return pending > 0 ? "\(base) \(RuleApproval.countText(pending)) (Tab „Regeln“)." : base
+    }
+
     var body: some View {
         if model.showsExternalChangeNotice {
             Button(action: model.dismissExternalChangeNotice) {
-                Label("Regeln wurden von außen geändert und neu geladen.", systemImage: "arrow.triangle.2.circlepath")
+                Label(text, systemImage: "arrow.triangle.2.circlepath")
                     .font(DS.help)
                     .foregroundStyle(DS.orange)
                     .padding(.horizontal, 14)

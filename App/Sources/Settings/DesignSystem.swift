@@ -148,26 +148,31 @@ struct Chip: View {
     var outlined = false
     var onAccent = false
     var maxWidth: CGFloat = 160
+    /// Getönter Chip (z. B. orange „Freigabe nötig“, §26.1).
+    var tint: Color?
 
-    init(_ text: String, outlined: Bool = false, onAccent: Bool = false, maxWidth: CGFloat = 160) {
+    init(_ text: String, outlined: Bool = false, onAccent: Bool = false, maxWidth: CGFloat = 160, tint: Color? = nil) {
         self.text = text
         self.outlined = outlined
         self.onAccent = onAccent
         self.maxWidth = maxWidth
+        self.tint = tint
     }
 
     var body: some View {
         Text(text)
-            .font(DS.small)
+            .font(tint == nil ? DS.small : DS.small.weight(.semibold))
             .lineLimit(1)
             .truncationMode(.tail)
-            .foregroundStyle(onAccent ? Color.white : Color.secondary)
+            .foregroundStyle(onAccent ? Color.white : (tint ?? Color.secondary))
             .padding(.horizontal, 6)
             .frame(height: 17)
             .frame(maxWidth: maxWidth, alignment: .leading)
             .fixedSize()
             .background {
-                if outlined {
+                if let tint {
+                    RoundedRectangle(cornerRadius: 5).fill(onAccent ? tint.opacity(0.85) : tint.opacity(DS.tint))
+                } else if outlined {
                     RoundedRectangle(cornerRadius: 5)
                         .strokeBorder(onAccent ? Color.white.opacity(0.6) : DS.hairline, lineWidth: 0.5)
                 } else {

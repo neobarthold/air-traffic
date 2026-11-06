@@ -26,5 +26,6 @@ fi
 
 echo "▸ Snapshots nach docs/images/"
 mkdir -p "$OUT"
-rm -f "$OUT"/*.png
+# Nur Snapshot-Bilder ersetzen; andere Bilder (z. B. trailer-poster.png) bleiben.
+find "$OUT" -maxdepth 1 -name "*.png" ! -name "trailer-*" -delete
 AIRTRAFFIC_CONFIG_PATH="$CONFIG" "$APP" --snapshot "$OUT"

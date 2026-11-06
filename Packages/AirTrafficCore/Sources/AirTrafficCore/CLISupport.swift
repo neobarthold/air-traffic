@@ -9,6 +9,19 @@ public enum AssistantCLI: String, Sendable, CaseIterable, Codable {
     /// Name der Binärdatei.
     public var executableName: String { rawValue }
 
+    /// Konfigurierter Pfad ist nur gültig, wenn der Dateiname exakt `claude` bzw. `codex` ist (§26.6).
+    /// Ein Symlink mit diesem Namen ist erlaubt; wohin er zeigt, spielt keine Rolle.
+    public func accepts(path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasSuffix("/") else { return false }
+        return (trimmed as NSString).lastPathComponent == executableName
+    }
+
+    /// Hinweis in den Einstellungen bei ungültigem Pfad.
+    public var invalidPathHint: String {
+        "Pfad ungültig – Datei muss \(executableName) heißen"
+    }
+
     public var displayName: String {
         switch self {
         case .claude: "Claude Code"
@@ -361,7 +374,9 @@ public struct CLILocator: Sendable {
 
     /// Ohne Login-Shell (schnell, synchron): konfigurierter Pfad, dann feste Orte.
     public func locateWithoutShell(_ cli: AssistantCLI, configuredPath: String?) -> URL? {
-        if let configured = configuredPath?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty {
+        // Ungültiger Dateiname (§26.6) → ignoriert, automatische Suche.
+        if let configured = configuredPath?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty,
+           cli.accepts(path: configured) {
             let path = expand(configured)
             if isExecutable(path) { return URL(fileURLWithPath: path) }
         }
@@ -476,7 +491,10 @@ public struct CLITransport: Sendable {
     }
 
     /// Version der CLI (`--version`), z. B. „2.1.318“; `nil`, wenn nicht ermittelbar.
+    /// Startet nur Dateien namens `claude` oder `codex` (§26.6).
     public static func version(of executable: URL, runner: any ProcessRunner = SystemProcessRunner()) async -> String? {
+        let name = executable.lastPathComponent
+        guard AssistantCLI.allCases.contains(where: { $0.executableName == name }) else { return nil }
         let invocation = ProcessInvocation(executable: executable, arguments: ["--version"], timeout: .seconds(5))
         guard let result = try? await runner.run(invocation), result.exitCode == 0 else { return nil }
         return parseVersion(result.stdoutText)

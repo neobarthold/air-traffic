@@ -60,7 +60,8 @@ public struct AgentCLI {
 
         <ref>: UUID, UUID-Präfix (ab 6 Zeichen), Position wie #3 oder exakter Name.
         Regeln als JSON wie in config.json; „airtraffic schema“ beschreibt das Format.
-        Vor jedem Schreiben wird eine Sicherung unter …/Air Traffic/backups/ angelegt (die letzten 30 bleiben).
+        Neue Regeln und Änderungen an Umschreibungen oder Aktion warten auf Freigabe in Air Traffic und wirken erst danach.
+        Vor jedem Schreiben wird eine Sicherung unter …/Air Traffic/backups/ angelegt (alle der letzten 24 h, je Tag die neueste und älteste für 14 Tage).
         AIRTRAFFIC_CONFIG_PATH=<datei> lenkt auf eine andere Konfiguration um.
         Exit-Codes: 0 ok, 64 Aufruf, 65 Eingabe/Regel ungültig oder nicht gefunden, 66 Konfiguration fehlt/unlesbar, 74 Schreibfehler.
         """

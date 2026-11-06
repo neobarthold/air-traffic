@@ -33,6 +33,8 @@ public enum RuleCheckStatus: Sendable, Equatable {
     case shadowed(by: UUID)
     /// Passt, ist aber deaktiviert.
     case disabledMatch
+    /// Neu von außen angelegt, passt, wartet aber auf Freigabe in der App (§26.1) – greift nicht.
+    case pendingMatch
     /// Bedingungen passen nicht.
     case noMatch
 }
@@ -76,15 +78,26 @@ public struct RuleCheckResult: Sendable, Equatable {
 
 extension RuleEngine {
     /// Prüft eine URL gegen alle Regeln (§22.5). Rein; ändert nichts.
+    ///
+    /// Wartende Änderungen (§26.1) zählen nicht: geänderte Regeln werden im freigegebenen Stand
+    /// geprüft, neu angelegte stehen als `pendingMatch` bzw. `noMatch` da.
     public static func check(url: URL, context: LinkContext, config: Config) -> RuleCheckResult {
         let decision = decide(url: url, context: context, config: config)
         let winner = decision.matchedRuleID
+        let tooLong = MatchLimits.isTooLong(url)
+        let budget = MatchBudget()
 
-        let entries = config.rules.enumerated().map { index, rule in
-            let results = rule.conditions.map { evaluate($0, url: url, context: context) }
-            let matches = combine(results, mode: rule.match)
+        let entries = config.rules.enumerated().map { index, stored in
+            let rule = stored.effective ?? stored
+            var ignored: String?
+            let results = tooLong
+                ? rule.conditions.map { _ in false }
+                : rule.conditions.map { evaluate($0, url: url, context: context, error: &ignored, budget: budget) }
+            let matches = !tooLong && combine(results, mode: rule.match)
             let status: RuleCheckStatus = if !matches {
                 .noMatch
+            } else if stored.effective == nil {
+                .pendingMatch
             } else if !rule.enabled {
                 .disabledMatch
             } else if rule.id == winner {

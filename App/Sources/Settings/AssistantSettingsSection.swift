@@ -183,7 +183,16 @@ struct AssistantSettingsSection: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        GroupRow(label: "Pfad") {
+        if cli == .codex {
+            GroupRow(label: " ") {
+                Label("Codex darf dabei Dateien lesen (Sandbox nur lesend).", systemImage: "eye")
+                    .font(DS.help)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        GroupRow(label: "Pfad", divider: configuredPath.map { cli.accepts(path: $0) } != false) {
             Text(configuredPath.map(abbreviated) ?? "Automatisch suchen")
                 .font(configuredPath == nil ? DS.body : DS.mono)
                 .foregroundStyle(.secondary)
@@ -196,6 +205,17 @@ struct AssistantSettingsSection: View {
             Button("Automatisch") { setPath(nil, for: cli) }
                 .disabled(configuredPath == nil)
                 .help("Pfad vergessen und automatisch suchen")
+        }
+        // Nur Dateien namens claude/codex werden gestartet (§26.6); sonst gilt die automatische Suche.
+        if let configuredPath, !cli.accepts(path: configuredPath) {
+            GroupRow(label: " ") {
+                Label(cli.invalidPathHint, systemImage: "exclamationmark.triangle.fill")
+                    .font(DS.help)
+                    .foregroundStyle(DS.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help("Konfigurierter Pfad wird ignoriert; Air Traffic sucht automatisch.")
+            }
         }
         GroupRow(label: "Modell", divider: testing || status != nil) {
             TextField(
@@ -245,6 +265,8 @@ struct AssistantSettingsSection: View {
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
         panel.treatsFilePackagesAsDirectories = true
+        // Symlinks wie /opt/homebrew/bin/claude nicht auflösen – maßgeblich ist der Dateiname (§26.6).
+        panel.resolvesAliases = false
         let current = model.cliStatus[cli]?.url ?? URL(fileURLWithPath: "/opt/homebrew/bin/\(cli.executableName)")
         panel.directoryURL = current.deletingLastPathComponent()
         guard panel.runModal() == .OK, let url = panel.url else { return }

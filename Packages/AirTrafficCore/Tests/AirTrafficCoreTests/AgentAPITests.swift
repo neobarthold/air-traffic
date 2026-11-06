@@ -30,14 +30,17 @@ struct AgentAPITests {
             "name": "Figma", "conditions": [["type": "host", "op": "endsWith", "value": "figma.com"]],
             "action": ["type": "open", "app": "Figma"], "testURL": "https://www.figma.com/file/1",
         ], position: 1)
-        #expect(result.json["check"]?["status"] == "wins")
-        #expect(result.text.contains("Test-URL https://www.figma.com/file/1: greift"))
+        // Neu angelegt → wartet auf Freigabe (§26.1); die Vorschau nach Freigabe zeigt, was dann passiert.
+        #expect(result.json["check"]?["status"] == "pendingMatch")
+        #expect(result.json["checkAfterApproval"]?["status"] == "wins")
+        #expect(result.text.contains("wartet auf Freigabe in Air Traffic"))
+        #expect(result.text.contains("Nach Freigabe: Test-URL https://www.figma.com/file/1: greift"))
 
         // Hinter „Alles Mögliche“ (passt immer) ist die Regel verdeckt.
         let shadowed = try temp.api().updateRule("Figma", patch: ["position": 3])
         #expect(shadowed.json["rule"]?["position"] == 3)
-        #expect(shadowed.json["check"]?["status"] == "shadowed")
-        #expect(shadowed.json["check"]?["winnerPosition"] == 2)
+        #expect(shadowed.json["checkAfterApproval"]?["status"] == "shadowed")
+        #expect(shadowed.json["checkAfterApproval"]?["winnerPosition"] == 2)
     }
 
     @Test func dryRunWritesNothing() throws {
@@ -133,7 +136,7 @@ struct AgentAPITests {
 
 @Suite("Sicherung und koordiniertes Schreiben (§24.4)")
 struct ConfigModifyTests {
-    @Test func backupBeforeEveryWriteKeepsLast30() throws {
+    @Test func backupBeforeEveryWriteKeepsAllOfLast24Hours() throws {
         let temp = try TempConfig()
         defer { temp.remove() }
         let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -147,13 +150,12 @@ struct ConfigModifyTests {
             let backup = try #require(result.backupURL)
             #expect(try Data(contentsOf: backup) == before)
         }
+        // Alle innerhalb von 24 h bleiben (§26.10); die älteste ist der Stand vor der ersten Änderung.
         let backups = temp.store.backups()
-        #expect(backups.count == ConfigStore.backupLimit)
-        // Die ältesten fünf sind weg, die neueste Sicherung ist der Stand vor der letzten Änderung.
-        #expect(backups.first?.lastPathComponent == "config-\(ConfigStore.backupStamp(start.addingTimeInterval(5))).json")
+        #expect(backups.count == 35)
+        #expect(backups.first?.lastPathComponent == "config-\(ConfigStore.backupStamp(start)).json")
+        #expect(try Data(contentsOf: try #require(backups.first)) == firstContent)
         #expect(try temp.load().rules[0].name == "Name 34")
-        #expect(try Data(contentsOf: try #require(backups.last)).count > 0)
-        #expect(firstContent != nil)
     }
 
     @Test func backupNameIsISOLikeAndUnique() throws {

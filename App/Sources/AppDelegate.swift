@@ -1,5 +1,6 @@
 import AirTrafficCore
 import AppKit
+import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -8,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let opener: Opener
     let intake: LinkIntake
     let updates: UpdateController
+    private let notifier = ExternalChangeNotifier()
     private var settingsController: SettingsWindowController?
 
     var settings: SettingsWindowController {
@@ -37,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return false }
             return self.chooser.isShowing || self.settingsController?.window?.isVisible == true
         }
+        // Mitteilung bei Änderungen von außen (§26.1); Klick öffnet die erste wartende Regel.
+        model.onExternalChange = { [weak self] config in self?.notifier.post(for: config) }
+        UNUserNotificationCenter.current().delegate = self
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -72,5 +77,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         settings.show()
+    }
+
+    /// Einstellungen → Regeln mit der Regel aus der Mitteilung bzw. der ersten wartenden.
+    func showPendingRule(_ id: UUID?) {
+        let target = id.flatMap { model.rule(withID: $0)?.id } ?? model.firstPendingRuleID
+        model.ruleQuery = ""
+        model.settingsTab = .rules
+        if let target { model.selectedRuleID = target }
+        showSettings()
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let id = (response.notification.request.content.userInfo[ExternalChangeNotifier.ruleIDKey] as? String)
+            .flatMap(UUID.init(uuidString:))
+        await MainActor.run { self.showPendingRule(id) }
+    }
+
+    /// Auch zeigen, wenn Air Traffic gerade vorne ist.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list]
     }
 }

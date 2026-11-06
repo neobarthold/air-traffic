@@ -56,6 +56,8 @@ final class AppModel {
     @ObservationIgnored private var isApplyingExternalChange = false
     @ObservationIgnored private var watcher: ConfigFileWatcher?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    /// Nach jeder Übernahme einer Änderung von außen (§26.1): macOS-Mitteilung. Setzt der AppDelegate.
+    @ObservationIgnored var onExternalChange: ((Config) -> Void)?
 
     /// Ausgewählter Tab im Einstellungsfenster (z. B. Sprung zu „Allgemein“ aus dem Regel-Editor).
     var settingsTab: SettingsTab = .general
@@ -156,7 +158,7 @@ final class AppModel {
             try? FileManager.default.moveItem(at: store.fileURL, to: backup)
             config = AppModel.firstRunConfig()
             problem = "Konfiguration war nicht lesbar (\(error.localizedDescription)). Gesichert als \(backup.lastPathComponent)."
-            Log.config.error("Konfiguration nicht lesbar: \(String(describing: error), privacy: .public)")
+            Log.config.error("Konfiguration nicht lesbar: \(String(describing: error), privacy: .private)")
             saveNow()
         }
         refreshAssistantKey()
@@ -217,7 +219,7 @@ final class AppModel {
             }
         } catch {
             problem = "Speichern fehlgeschlagen: \(error.localizedDescription)"
-            Log.config.error("Speichern fehlgeschlagen: \(String(describing: error), privacy: .public)")
+            Log.config.error("Speichern fehlgeschlagen: \(String(describing: error), privacy: .private)")
         }
     }
 
@@ -230,7 +232,7 @@ final class AppModel {
         do {
             data = try store.coordinatedData()
         } catch {
-            Log.config.error("Konfiguration nicht lesbar: \(String(describing: error), privacy: .public)")
+            Log.config.error("Konfiguration nicht lesbar: \(String(describing: error), privacy: .private)")
             return
         }
         guard ConfigSync.changeDecision(known: knownFingerprint, current: data.map(ConfigStore.fingerprint)) == .reload,
@@ -241,7 +243,7 @@ final class AppModel {
         } catch {
             // Nicht übernehmen und nicht überschreiben: Speichern meldet den Konflikt, bis die Datei wieder gültig ist.
             problem = "Von außen geändert, aber nicht lesbar (\(error.localizedDescription))."
-            Log.config.error("Externe Änderung nicht lesbar: \(String(describing: error), privacy: .public)")
+            Log.config.error("Externe Änderung nicht lesbar: \(String(describing: error), privacy: .private)")
         }
     }
 
@@ -256,8 +258,9 @@ final class AppModel {
         if let id = selectedRuleID, !config.rules.contains(where: { $0.id == id }) { selectedRuleID = nil }
         if problem?.hasPrefix("Von außen") == true { problem = nil }
         externalReloadCount += 1
-        Log.config.info("Konfiguration von außen geändert und neu geladen")
+        Log.config.info("Konfiguration von außen geändert und neu geladen, wartend: \(self.pendingRuleCount)")
         showExternalChangeNotice()
+        onExternalChange?(config)
     }
 
     private func showExternalChangeNotice() {
@@ -273,6 +276,36 @@ final class AppModel {
     func dismissExternalChangeNotice() {
         noticeTask?.cancel()
         showsExternalChangeNotice = false
+    }
+
+    // MARK: Freigabe (§26.1)
+
+    /// Regeln, die auf Freigabe warten.
+    var pendingRuleCount: Int { RuleApproval.pendingCount(in: config) }
+
+    /// Erste wartende Regel (Sprung aus der Mitteilung).
+    var firstPendingRuleID: UUID? { config.rules.first(where: \.isPendingApproval)?.id }
+
+    /// „Freigeben“: Änderung gilt ab sofort.
+    func approveRule(_ id: UUID) {
+        guard let index = config.rules.firstIndex(where: { $0.id == id }) else { return }
+        config.rules[index] = RuleApproval.approve(config.rules[index])
+        Log.config.info("Regel freigegeben: \(self.config.rules[index].name, privacy: .public)")
+    }
+
+    /// „Verwerfen“: neu angelegt → löschen, geändert → zuletzt freigegebenen Stand wiederherstellen.
+    func discardPendingChange(_ id: UUID) {
+        guard let index = config.rules.firstIndex(where: { $0.id == id }) else { return }
+        let name = config.rules[index].name
+        if let restored = RuleApproval.discard(config.rules[index]) {
+            config.rules[index] = restored
+        } else {
+            config.rules.remove(at: index)
+            if selectedRuleID == id {
+                selectedRuleID = config.rules.isEmpty ? nil : config.rules[min(index, config.rules.count - 1)].id
+            }
+        }
+        Log.config.info("Änderung von außen verworfen: \(name, privacy: .public)")
     }
 
     // MARK: Darstellung (§23.1)

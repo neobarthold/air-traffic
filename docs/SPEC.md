@@ -583,3 +583,56 @@ Ersetzt die Tab-Aufteilung aus §23.3/§24.7:
 
 ### 25.1 Status der Safari-Erweiterung im Entwicklungs-Build
 Safari führt Erweiterungen als „<Bundle-ID> (<Team-ID>)“. Ein ad hoc signierter Debug-Build hat keine Team-ID; `SFSafariExtensionManager` und `showPreferencesForExtension` liefern dort `SFErrorDomain 1` (noExtensionFound). Die App erkennt das über die eigene Signatur (keine Team-ID) und zeigt „Entwicklungs-Build“ mit Erklärung statt „Unbekannt“ + Rohfehler; `SFErrorDomain 1` in der signierten App → „Von Safari nicht gefunden“ mit Hinweis (aus /Programme starten, Safari neu öffnen).
+
+## 26. Sicherheits-Härtung nach Audit (v1.9)
+
+Grundlage: Security-Audit vom 2026-11-06 (zwei unabhängige Prüfer, Stand 1.8). Ziel: alle code-seitig behebbaren Befunde schließen, ohne Funktionen zu verlieren.
+
+### 26.1 Freigabe für riskante Agenten-Änderungen (Befund: Agent leitet Links still um)
+- Änderungen über CLI/MCP (`AgentAPI`, beide Wege gleich – ein Agent kann auch die CLI nutzen) an **`rewrites`** oder **`action`** (auch beim Anlegen einer Regel mit Umschreibungen oder einer Aktion) werden **nicht sofort wirksam**. Die Regel bekommt `pendingChange` (Codable, optional, abwärtskompatibel): `since: Date`, `reason: String`, `previous: Rule?` (vollständige vorherige Regel; nil = neu angelegt).
+- **Engine:** Regeln mit `pendingChange` gelten so, als gäbe es die Änderung nicht: neu angelegt → wird übersprungen; geändert → `previous` wird ausgewertet. Gilt für `decide`, `check`, `test`-Vorrang. Name/Bedingungen/Test-URL/Position/an-aus ohne Umschreibungs- oder Aktionsänderung bleiben sofort wirksam; `set_rule_enabled`/`enable` auf eine wartende neue Regel macht sie nicht wirksam.
+- Agenten können nicht freigeben: kein CLI-Befehl, kein MCP-Tool, und `pendingChange` in Eingaben wird abgelehnt. Antworten von create/update nennen „wartet auf Freigabe in Air Traffic“; MCP-`instructions` und `describe_rule_format` erklären das. Ändert ein Agent eine wartende Regel erneut, bleibt `previous` der letzte freigegebene Stand.
+- **App:** Regel-Liste: Chip „Freigabe nötig“ (orange) und Zähler in der Fußleiste. Editor: orange Karte oben „Von außen geändert – wartet auf Freigabe“ mit Vorher/Nachher für Umschreibungen (Muster, Vorlage) und Aktion (Ziel-App mit Pfad), Ergebnis-Vorschau mit Test-URL; Knöpfe „Freigeben“ (entfernt `pendingChange`) und „Verwerfen“ (neu → löschen, geändert → `previous` wiederherstellen). Bearbeitet der Nutzer die Regel in der App, bleibt die Freigabe trotzdem nötig (expliziter Knopf).
+- **Mitteilung:** Bei jeder Übernahme einer Änderung von außen (§24.5) eine macOS-Mitteilung (UserNotifications; Berechtigung beim ersten Mal anfragen): „Regeln von außen geändert“ + „n wartet/warten auf Freigabe“; Klick öffnet Einstellungen → Regeln mit der ersten wartenden Regel. Ohne Berechtigung bleibt es bei der orangen Zeile.
+- **Ziel sichtbar:** Kurzbeschreibungen (CLI `rules list`, MCP `list_rules`, Chips der Regel-Liste) zeigen bei Umschreibungen das Ziel (literaler Anfang der Vorlage bis zum ersten `$`, z. B. „↻ review.example.com“), nicht nur „umschreiben“.
+
+### 26.2 Schema nach dem Umschreiben (Befund: beliebige Schemata)
+- Ergebnis einer Umschreibung ist nur gültig, wenn ihr Schema `http`/`https` ist, **oder** gleich dem Schema der Original-URL, **oder** literal am Anfang der Vorlage steht (z. B. `linear://…` – vom Regel-Autor bewusst gesetzt, nicht aus der URL übernommen). Sonst: Original-URL + Warnung (wie ungültige URL). Opener prüft zusätzlich: `file:` nur, wenn die Original-URL `file:` war.
+- Regel-Test/Prüfmodus zeigen einen Schemawechsel als Warnung. Tests: `?u=file:…`, `smb:`, `javascript:`, `vscode:` über `$1` → abgelehnt; literales `linear://` in der Vorlage → erlaubt; file→file erlaubt.
+
+### 26.3 Laufzeit-Schutz beim Regel-Abgleich (Befund: App hängt bei langen URLs)
+- **Platzhalter** (`wildcard`) ohne Regex: linearer Glob-Abgleich (`*`, `?`, `\`-Maskierung, Groß/Klein wie bisher), O(n·m) worst case ohne Backtracking-Explosion. Verhalten identisch zu bisher (bestehende Tests grün, plus Äquivalenztests).
+- **URL-Länge:** URLs über 8192 Zeichen werden nicht gegen Regeln geprüft; es erscheint das Auswahlfenster mit Hinweis „Link zu lang für Regeln“ (Aktion `.prompt(.all)`), Warnung im Ergebnis.
+- **Regex mit Zeitbudget:** Regex-Abgleich (Bedingungen und Umschreibungen) über `enumerateMatches(options: .reportProgress)` mit Abbruch nach Frist; Gesamtbudget je Link 500 ms. Überschritten → Regel gilt als „trifft nicht“, Warnung „Regel „X“: Zeitlimit überschritten“, bei Umschreibung Original-URL. Kompilierte Regex werden gecacht (Muster + Optionen).
+- `decide` läuft nicht mehr blockierend auf dem Main Actor (Hintergrund-Task, Ergebnis zurück auf Main). Reihenfolge eingehender Links bleibt erhalten.
+- Tests: pathologische Muster (`*a*b*c*d*`, `^(a|aa)+$`) mit 60 000 Zeichen enden < 1 s.
+
+### 26.4 Quell-App aus `airtraffic://` (Befund: `source` fälschbar)
+- `source` wird nur übernommen, wenn es `com.apple.Safari` ist (der einzige Wert der eigenen Erweiterung); andere Werte werden ignoriert (Warnung im Log, Quelle = tatsächlicher Absender des Apple Events, sonst „unbekannt“).
+- Zusätzlich: Absender-PID aus dem Apple Event (`keySenderPIDAttr`/Audit-Token) ermitteln; liegt dessen Programm in `<eigene App>/Contents/PlugIns/`, gilt der Link als „von der Erweiterung“. Ist er das nicht, zeigt das Auswahlfenster statt „von Safari“ „über airtraffic://-Link“. (Falls die PID sich nicht zuverlässig ermitteln lässt: im Bericht melden, dann gilt nur die Safari-Beschränkung.)
+
+### 26.5 Debug-Schalter nur im Debug-Build (Befund: `--suggest-regex` nutzt Key)
+- `--decide`, `--suggest-regex`, `--snapshot` nur mit `#if DEBUG`. Release-Build ignoriert sie (normaler Start). README entsprechend.
+
+### 26.6 KI-CLI-Pfade (Befund: beliebige ausführbare Datei)
+- Konfigurierte `claudePath`/`codexPath` werden nur verwendet, wenn der Dateiname exakt `claude` bzw. `codex` ist (Symlink erlaubt, Ziel egal); sonst ignoriert und in den Einstellungen als „Pfad ungültig – Datei muss claude/codex heißen“ angezeigt. Die automatische Statusprüfung (`--version`) startet nur gültige Pfade.
+- Codex: In den Einstellungen beim Anbieter Codex Hinweis „Codex darf dabei Dateien lesen (Sandbox nur lesend)“. Prompt für Codex mit klarer Anweisung, keine Werkzeuge/Shell zu nutzen und nur JSON zu antworten. (Keine ungetesteten Codex-Flags einbauen.)
+
+### 26.7 Keine URLs öffentlich im Log
+- Alle Log-Meldungen, die URLs oder Teile davon enthalten können (Engine-/Rewriter-Warnungen, ParseError-Beschreibungen, Erweiterung), mit `privacy: .private` bzw. ohne URL-Inhalt. Öffentlich bleiben nur Bundle-IDs, Pfade der App, Zähler, Regelnamen.
+
+### 26.8 Auswahlfenster gegen Spam und Fehl-Tastendrücke
+- Warteschlange höchstens 5 Einträge; identische URLs zusammenfassen; weitere verwerfen (Log-Warnung, ab dann für 10 s nur Log).
+- Tasten (Ziffern, ⏎) in den ersten 300 ms nach dem Erscheinen eines Eintrags ignorieren.
+- `airtraffic://` mit `prompt=1` höchstens 3 pro 10 s (weitere werden verworfen).
+- Host-Anzeige: lange Hosts **vorne** kürzen (`…evil.example`), sodass die registrierbare Domain sichtbar bleibt; voller Host im Tooltip/VoiceOver.
+
+### 26.9 Schleifenbremse
+- Dieselbe URL wird innerhalb von 5 s höchstens 3-mal an eine App übergeben; danach Auswahlfenster mit Hinweis „Link kreist zwischen Apps“.
+
+### 26.10 Sicherungen
+- Aufbewahrung nach Zeit: alle Sicherungen der letzten 24 h (höchstens 100) plus jeweils die neueste pro Tag für 14 Tage. Die Sicherung vor der ersten Agenten-Änderung eines Tages bleibt so erhalten. Tests für die Rotation.
+
+### 26.11 Abnahme
+- Build ohne Warnungen, alle Tests grün (neue Tests je Punkt), `--snapshot` (Debug) zeigt wartende Regel in Liste und Editor (hell/dunkel).
+- README: Abschnitt „Sicherheit“ (Freigabe, Schema-Regel, Grenzen) und Datenschutz ergänzen; Debug-Schalter nur Debug.

@@ -120,7 +120,7 @@ enum RuleText {
             }
             conditions = "\(rule.conditions.count) Bedingungen (\(mode))"
         }
-        let rewrite = rule.rewrites.isEmpty ? "" : " · umschreiben"
+        let rewrite = RuleDescriber.rewriteChip(rule.rewrites).map { " · \($0)" } ?? ""
         return "\(conditions)\(rewrite) → \(ActionText.describe(rule.action))"
     }
 }

@@ -170,6 +170,11 @@ public struct RuleInput: Sendable {
         var result: [String: JSONValue] = [:]
         var position: Int?
         for key in object.keys.sorted() where !Self.ruleKeys.contains(key) {
+            if key == "pendingChange" {
+                // Freigabe nur in der App (§26.1).
+                issues.append(RuleApproval.inputIssue)
+                continue
+            }
             issues.append(FieldIssue(key, "unbekanntes Feld (erlaubt: \(Self.ruleKeys.sorted().joined(separator: ", ")))"))
         }
         for (key, value) in object.sorted(by: { $0.key < $1.key }) where Self.ruleKeys.contains(key) {
@@ -567,7 +572,7 @@ public enum RuleDescriber {
         }
     }
 
-    /// „Host ist „github.com“ · umschreiben → öffnen mit Chrome“.
+    /// „Host ist „github.com“ · ↻ review.example.com → öffnen mit Chrome“.
     public static func summary(_ rule: Rule) -> String {
         let conditions: String
         switch rule.conditions.count {
@@ -581,7 +586,7 @@ public enum RuleDescriber {
             }
             conditions = "\(rule.conditions.count) Bedingungen (\(mode))"
         }
-        let rewrite = rule.rewrites.isEmpty ? "" : " · umschreiben"
+        let rewrite = rewriteChip(rule.rewrites).map { " · \($0)" } ?? ""
         return "\(conditions)\(rewrite) → \(action(rule.action))"
     }
 }

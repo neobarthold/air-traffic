@@ -62,8 +62,10 @@ public enum RuleFormat {
                 "openFirstRunning": "{type: openFirstRunning, fallback?} – oberster laufender Browser der Liste, sonst fallback",
                 "prompt": "{type: prompt, scope: all|running} – Auswahlfenster",
             ],
-            "rewrites": "{pattern, template, caseSensitive?}: Regex auf die ganze URL; template mit $1, $2 … für Gruppen; ersetzt nur, wenn pattern trifft; Ergebnis muss eine gültige URL sein",
+            "rewrites": "{pattern, template, caseSensitive?}: Regex auf die ganze URL; template mit $1, $2 … für Gruppen; ersetzt nur, wenn pattern trifft; Ergebnis muss eine gültige URL mit erlaubtem Schema sein (siehe schemes)",
             "order": "Regeln werden von oben nach unten geprüft; die erste aktive passende Regel gewinnt. Wenn keine passt: Standardaktion (get_settings).",
+            "approval": "Neue Regeln und Änderungen an rewrites oder action warten auf Freigabe durch den Nutzer in der App (pendingApproval: true, Feld pendingChange) und wirken bis dahin nicht – geänderte Regeln gelten im zuletzt freigegebenen Stand. Name, conditions, testURL, position und enabled wirken sofort. Agenten können nicht freigeben; pendingChange in Eingaben ist ein Fehler.",
+            "schemes": "Nach den Umschreibungen ist nur http/https erlaubt, das Schema der Original-URL oder ein Schema, das literal am Anfang der Vorlage steht (z. B. linear://…). Sonst bleibt die Original-URL.",
             "examples": [exampleHost, exampleRewrite, exampleSourceApp],
         ]
     }
@@ -88,7 +90,14 @@ public enum RuleFormat {
 
         Umschreibungen (rewrites[], nacheinander):
           {pattern, template, caseSensitive?} – Regex auf die ganze URL, template mit $1, $2 …;
-          ersetzt nur, wenn pattern trifft.
+          ersetzt nur, wenn pattern trifft. Ergebnis-Schema: http/https, das der Original-URL oder
+          literal am Anfang der Vorlage (z. B. linear://…) – sonst bleibt die Original-URL.
+
+        Freigabe:
+          Neue Regeln und Änderungen an rewrites oder action warten auf Freigabe durch den Nutzer in
+          Air Traffic (pendingApproval) und wirken bis dahin nicht; geänderte Regeln gelten im zuletzt
+          freigegebenen Stand. Name, conditions, testURL, Position und an/aus wirken sofort.
+          Agenten können nicht freigeben; pendingChange in Eingaben wird abgelehnt.
 
         Aktion (action):
           {type: "open", app}                 app = Name, Bundle-ID, Pfad oder {bundleIdentifier, path, displayName}

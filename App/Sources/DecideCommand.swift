@@ -1,3 +1,5 @@
+// Debug-Schalter: nur im Debug-Build (§26.5); der Release-Build kennt den Befehl nicht.
+#if DEBUG
 import AirTrafficCore
 import AppKit
 
@@ -67,3 +69,4 @@ enum DecideCommand {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 }
+#endif

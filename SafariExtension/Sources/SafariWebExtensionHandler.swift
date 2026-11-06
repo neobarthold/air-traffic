@@ -39,7 +39,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         do throws(AirTrafficURL.ParseError) {
             _ = try AirTrafficURL.parse(target)
         } catch {
-            log.error("Link verworfen: \(error.description, privacy: .public)")
+            log.error("Link verworfen: \(error.description, privacy: .private)")
             return ["ok": false, "error": "unsupported-url"]
         }
 

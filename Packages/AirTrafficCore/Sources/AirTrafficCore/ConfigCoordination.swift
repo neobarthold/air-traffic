@@ -27,8 +27,10 @@ public struct ConfigModification<Value: Sendable>: Sendable {
 }
 
 extension ConfigStore {
-    /// Anzahl der Sicherungskopien, die erhalten bleiben (§24.4).
-    public static let backupLimit = 30
+    /// Aufbewahrung (§26.10): alle Sicherungen der letzten 24 h, höchstens so viele …
+    public static let recentBackupLimit = 100
+    /// … plus je Tag die neueste (und die älteste) für so viele Tage.
+    public static let dailyBackupDays = 14
 
     /// `…/Air Traffic/backups` neben `config.json`.
     public var backupDirectory: URL {
@@ -134,7 +136,7 @@ extension ConfigStore {
 
     // MARK: Sicherungen
 
-    /// Kopie nach `backups/config-<ISO-Zeit>.json`; danach bleiben die neuesten `backupLimit`.
+    /// Kopie nach `backups/config-<ISO-Zeit>.json`; danach wird nach Zeit ausgedünnt (§26.10).
     @discardableResult
     func writeBackup(_ data: Data, now: Date) throws -> URL {
         let fm = FileManager.default
@@ -148,7 +150,7 @@ extension ConfigStore {
             target = dir.appending(path: "config-\(stamp)-\(counter).json")
         }
         try data.write(to: target, options: .atomic)
-        try pruneBackups()
+        try pruneBackups(now: now)
         return target
     }
 
@@ -163,12 +165,58 @@ extension ConfigStore {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    func pruneBackups() throws {
+    func pruneBackups(now: Date, calendar: Calendar = .current) throws {
         let all = backups()
-        guard all.count > ConfigStore.backupLimit else { return }
-        for url in all.prefix(all.count - ConfigStore.backupLimit) {
+        let keep = ConfigStore.backupsToKeep(all, now: now, calendar: calendar)
+        for url in all where !keep.contains(url) {
             try FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Aufbewahrung nach Zeit (§26.10): alle Sicherungen der letzten 24 h (höchstens
+    /// `recentBackupLimit`, die neuesten) plus je Kalendertag der letzten `dailyBackupDays` Tage die
+    /// neueste und die älteste. Die älteste eines Tages ist die Sicherung vor der ersten Änderung des
+    /// Tages. Sicherungen mit unbekanntem Namen bleiben.
+    static func backupsToKeep(_ urls: [URL], now: Date, calendar: Calendar) -> Set<URL> {
+        var keep = Set<URL>()
+        var dated: [(url: URL, date: Date)] = []
+        for url in urls {
+            if let date = backupDate(url) {
+                dated.append((url, date))
+            } else {
+                keep.insert(url)
+            }
+        }
+        dated.sort { $0.date > $1.date }
+
+        let recent = dated.filter { now.timeIntervalSince($0.date) < 24 * 60 * 60 }
+        keep.formUnion(recent.prefix(recentBackupLimit).map(\.url))
+
+        let today = calendar.startOfDay(for: now)
+        var byDay: [Date: [(url: URL, date: Date)]] = [:]
+        for item in dated {
+            byDay[calendar.startOfDay(for: item.date), default: []].append(item)
+        }
+        for (day, items) in byDay {
+            let age = calendar.dateComponents([.day], from: day, to: today).day ?? Int.max
+            guard age < dailyBackupDays else { continue }
+            // `items` ist absteigend sortiert: erstes = neueste, letztes = älteste.
+            if let newest = items.first { keep.insert(newest.url) }
+            if let oldest = items.last { keep.insert(oldest.url) }
+        }
+        return keep
+    }
+
+    /// Zeitpunkt aus `config-2026-11-06T14-22-33.123Z[-2].json`.
+    static func backupDate(_ url: URL) -> Date? {
+        let name = url.deletingPathExtension().lastPathComponent
+        guard name.hasPrefix("config-") else { return nil }
+        let stamp = name.dropFirst("config-".count).prefix("yyyy-MM-ddTHH-mm-ss.SSSZ".count)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss.SSS'Z'"
+        return formatter.date(from: String(stamp))
     }
 
     /// `2026-11-06T14-22-33.123Z` (UTC, Doppelpunkte als Bindestrich – Finder-tauglich, sortierbar).
